@@ -215,6 +215,10 @@ export const api = {
 
   adminAnalytics: () => request('/analytics/admin', { auth: true }),
   candidateAnalytics: () => request('/analytics/candidate', { auth: true }),
+  // Module 8. Separate from the line above because it scans every answer
+  // ever given — the dashboard header should not wait on that.
+  candidatePerformance: () => request('/analytics/candidate/performance', { auth: true }),
+
   recruiterAnalytics: () => request('/analytics/recruiter', { auth: true }),
   recruiterCandidates: (params) =>
     request(`/analytics/recruiter/candidates${query(params)}`, { auth: true }),

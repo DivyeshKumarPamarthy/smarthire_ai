@@ -8,6 +8,7 @@ import { Panel } from '../../components/Panel';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../lib/api';
 import { useApi } from '../../lib/useApi';
+import PerformanceAnalytics from '../../components/PerformanceAnalytics';
 import { downloadTextFile, buildActivityReport } from '../../lib/report';
 
 const TYPES = ['TECHNICAL', 'HR', 'APTITUDE', 'BEHAVIORAL'];
@@ -71,6 +72,9 @@ export default function CandidateHome() {
   const me = user?.name ?? 'Candidate';
 
   const stats = useApi(() => api.candidateAnalytics());
+  // Module 8. Its own request: this walks every answer ever given, and the
+  // header above must not wait on that scan to render.
+  const performance = useApi(() => api.candidatePerformance());
   const interviews = useApi(() => api.listInterviews({ limit: 50 }));
   const resume = useApi(() => api.myResume());
   const recruiters = useApi(() => api.directory('RECRUITER'));
@@ -492,6 +496,15 @@ export default function CandidateHome() {
             </div>
           )}
         </Panel>
+
+        <div className="card">
+          <h2>Performance history</h2>
+          <PerformanceAnalytics
+            data={performance.data}
+            loading={performance.loading}
+            error={performance.error}
+          />
+        </div>
 
         <div className="grid cols-2">
           <div className="card">

@@ -33,6 +33,7 @@ from app.models.resume import Resume, ResumeStatus
 from app.models.ticket import Ticket, TicketStatus
 from app.models.user import Role, User
 from app.schemas.analytics import (
+    CandidatePerformance,
     AdminAnalytics,
     CandidateAnalytics,
     CandidateInterviewSummary,
@@ -43,7 +44,7 @@ from app.schemas.analytics import (
     RecruiterCandidate,
     TimePoint,
 )
-from app.services import behavior_analysis
+from app.services import behavior_analysis, performance_analytics
 from app.services.scoring import rating_label
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -466,3 +467,40 @@ def live_interviews(db: Session = Depends(get_db)):
             )
         )
     return out
+
+
+@router.get(
+    "/candidate/performance",
+    response_model=CandidatePerformance,
+    dependencies=[Depends(require_roles(Role.CANDIDATE))],
+)
+def candidate_performance(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Module 8: skill-wise breakdown, performance trend and weak areas.
+
+    Split out from /candidate rather than bolted onto it. That endpoint backs
+    the dashboard header and is fetched on every visit; this one walks every
+    answer the candidate has ever given, and making the header wait on that
+    scan would be paying for the detail on the pages that never show it.
+
+    Reads only the transcript-based Module 5 scores. Module 6's camera figures
+    are deliberately absent: they are measured in the candidate's own browser
+    and are therefore forgeable, and the platform's standing rule is that they
+    never feed a number that ranks or grades anyone.
+    """
+    rows = (
+        db.query(InterviewQuestion.category, InterviewQuestion.analysis)
+        .join(Interview, InterviewQuestion.interview_id == Interview.id)
+        .filter(Interview.user_id == current_user.id)
+        .all()
+    )
+    interviews = db.query(Interview).filter(Interview.user_id == current_user.id).all()
+
+    return CandidatePerformance(
+        skills=performance_analytics.skill_breakdown(rows),
+        trend=performance_analytics.performance_trend(interviews),
+        weak_areas=performance_analytics.weak_areas(rows),
+    )
