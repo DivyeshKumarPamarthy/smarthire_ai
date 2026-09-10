@@ -446,9 +446,83 @@ def _score_interview(db: Session, interview: Interview) -> dict:
         scoring.time_management_score(interview),
     )
     interview.overall_score = overall
+    _notify_report_ready(db, interview)
     if overall is None:
         return {"available": False}
     return {"available": True, "overall": overall, "rating": scoring.rating_label(overall)}
+
+
+def _notify_report_ready(db: Session, interview: Interview) -> None:
+    """
+    Module 9: tell the candidate their report exists.
+
+    Best-effort in the strongest sense — this runs at the moment an interview
+    is finalised, and a notification failing must never cost the candidate the
+    completion itself. Anything that goes wrong here is logged and swallowed.
+
+    Deliberately fires whether or not a score was produced: "recorded but not
+    scored" is exactly the case a candidate most needs telling about, and only
+    notifying on success would leave them waiting for a report that is never
+    coming.
+    """
+    try:
+        from app.models.notification import NotificationKind
+        from app.models.user import Role, User
+        from app.services import notifications as notify_service
+
+        user = db.query(User).filter(User.id == interview.user_id).first()
+        if user is None:
+            return
+
+        # The candidate: their own report.
+        title, body = notify_service.compose_report_ready(interview)
+        notify_service.notify(
+            db, user,
+            kind=NotificationKind.REPORT_READY,
+            title=title, body=body,
+            interview_id=interview.id,
+            # Automated, because this is transactional mail about the
+            # candidate's own interview. Their email_notifications switch is
+            # honoured inside notify(), and nothing sends at all until
+            # SMTP_HOST is configured.
+            send_email=True,
+        )
+
+        # Recruiters: a candidate finished something worth reviewing. Sent to
+        # the role rather than to an owner, because this schema has no
+        # recruiter-to-candidate assignment to address it to.
+        #
+        # KNOWN SCALING GAP, deliberately left. This fans out one notification
+        # per recruiter per completion, unbatched — unlike the stalled-interview
+        # reminder, which is digested. The asymmetry is intentional: a stalled
+        # reminder answers "what has been sitting?", which is a backlog question
+        # and reads well as a digest, whereas a completion is an event whose
+        # value is promptness. Collecting completions into a digest that only
+        # materialises when someone pulls it would mean a recruiter sees nothing
+        # until they press a button, which is a worse feature, not a better one.
+        #
+        # The part that actually hurts at scale is the email rather than the
+        # feed row: fifty entries are browsable, fifty emails are spam. Fixing
+        # that properly needs a scheduler this platform does not have — a
+        # periodic job that rolls the completions since its last run into one
+        # message per recruiter, leaving the in-app alerts real-time. Until
+        # there is one, the honest options are this or nothing.
+        #
+        # Recruiters who do not want the mail can switch it off; notify()
+        # honours their email_notifications preference.
+        title, body = notify_service.compose_interview_completed(user.name, interview)
+        notify_service.notify_role(
+            db, Role.RECRUITER,
+            kind=NotificationKind.SESSION_ALERT,
+            title=title, body=body,
+            interview_id=interview.id,
+            send_email=True,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Could not raise the report-ready notification for interview %s",
+            interview.id,
+        )
 
 
 _DEMO_PAGE = """<!doctype html>

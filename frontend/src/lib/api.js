@@ -195,6 +195,32 @@ export const api = {
     return URL.createObjectURL(await response.blob());
   },
 
+  /**
+   * Module 9: the interview's report as a PDF, downloaded to the browser.
+   *
+   * Fetched rather than linked, because the endpoint needs the bearer token
+   * and a plain <a href> cannot carry one.
+   */
+  downloadInterviewReport: async (interviewId) => {
+    const response = await fetch(
+      `${BASE}/notifications/reports/interview/${interviewId}.pdf`,
+      { headers: { Authorization: `Bearer ${getToken() ?? ''}` } },
+    );
+    if (!response.ok) {
+      throw new ApiError(response.status, 'That report could not be generated.');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `interview-${interviewId}-report.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    // Revoked on the next tick: revoking immediately can cancel the download
+    // in some browsers before it has actually started reading the blob.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  },
+
   /* Session control. The live interview drives these over the WebSocket
      instead; these are for controlling a session from outside it. */
   pauseInterview: (id) => request(`/interviews/${id}/pause`, { method: 'POST', auth: true }),
@@ -219,6 +245,27 @@ export const api = {
   // ever given — the dashboard header should not wait on that.
   candidatePerformance: () => request('/analytics/candidate/performance', { auth: true }),
 
+  // --- Module 9: notifications & reports ---
+  notifications: (unreadOnly = false) =>
+    request(`/notifications?unread_only=${unreadOnly}`, { auth: true }),
+  notificationSummary: () => request('/notifications/summary', { auth: true }),
+  markNotificationRead: (id) =>
+    request(`/notifications/${id}/read`, { method: 'POST', auth: true }),
+  markAllNotificationsRead: () =>
+    request('/notifications/read-all', { method: 'POST', auth: true }),
+  runReminders: (sendEmail = false) =>
+    request(`/notifications/reminders/run?send_email=${sendEmail}`, { method: 'POST', auth: true }),
+  emailPreference: () => request('/notifications/preferences', { auth: true }),
+  setEmailPreference: (enabled) =>
+    request('/notifications/preferences', {
+      method: 'PUT', auth: true, body: { email_notifications: enabled },
+    }),
+  stalledDigest: () =>
+    request('/notifications/reminders/stalled-digest', { method: 'POST', auth: true }),
+  sendPerformanceSummary: (sendEmail = false) =>
+    request(`/notifications/performance-summary?send_email=${sendEmail}`, {
+      method: 'POST', auth: true,
+    }),
   recruiterAnalytics: () => request('/analytics/recruiter', { auth: true }),
   recruiterCandidates: (params) =>
     request(`/analytics/recruiter/candidates${query(params)}`, { auth: true }),

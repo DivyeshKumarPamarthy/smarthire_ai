@@ -12,6 +12,7 @@ export const SECTIONS = {
     ['resume', 'Resume'],
     ['interview', 'Interview'],
     ['history', 'History'],
+    ['notifications', 'Alerts'],
     ['analytics', 'Analytics'],
     ['report', 'Report'],
     ['settings', 'Settings'],
@@ -24,6 +25,7 @@ export const SECTIONS = {
     ['compare', 'Compare'],
     ['templates', 'Templates'],
     ['sessions', 'Sessions'],
+    ['alerts', 'Alerts'],
     ['report', 'Report'],
   ],
   admin: [
@@ -33,6 +35,7 @@ export const SECTIONS = {
     ['tickets', 'Tickets'],
     ['api', 'API'],
     ['activity', 'Activity'],
+    ['alerts', 'Alerts'],
     ['ai', 'AI'],
     ['settings', 'Settings'],
   ],

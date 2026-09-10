@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, selectinload
 
@@ -9,6 +11,8 @@ from app.db.session import get_db
 from app.models.ticket import Ticket, TicketStatus
 from app.models.user import Role, User
 from app.schemas.ticket import REASONS, TicketCreate, TicketOut, TicketStatusUpdate
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -52,7 +56,31 @@ def create_ticket(
     db.add(ticket)
     db.commit()
     db.refresh(ticket)
+    _notify_admins_of_ticket(db, current_user, ticket)
     return TicketOut.from_model(ticket)
+
+
+def _notify_admins_of_ticket(db: Session, reporter, ticket) -> None:
+    """
+    Module 9: put a new report in front of the people who triage it.
+
+    Best-effort. A notification failing must never cost the reporter their
+    ticket — the report itself is already committed above.
+    """
+    try:
+        from app.models.notification import NotificationKind
+        from app.models.user import Role
+        from app.services import notifications as notify_service
+
+        title, body = notify_service.compose_ticket_raised(reporter.name, ticket.reason)
+        notify_service.notify_role(
+            db, Role.ADMIN,
+            kind=NotificationKind.SESSION_ALERT,
+            title=title, body=body,
+            send_email=True,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not notify admins about ticket %s", ticket.id)
 
 
 @router.get("", response_model=List[TicketOut])

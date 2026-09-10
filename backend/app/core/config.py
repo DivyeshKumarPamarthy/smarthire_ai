@@ -78,6 +78,23 @@ class Settings(BaseSettings):
     # alternative; set ANALYSE_ANSWERS=false to run interviews without it.
     GEMINI_STT_MODEL: str = "gemini-3.6-flash"
 
+    # --- Module 9: outgoing email ---
+    # Nothing is sent until SMTP_HOST is set. That is deliberate rather than a
+    # placeholder: a half-configured mailer that raises on every interview
+    # completion would take down the thing it was meant to report on, so an
+    # unconfigured mailer logs what it would have sent and returns cleanly.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    # The From: address. Falls back to SMTP_USER, which is what most providers
+    # require the sender to be anyway.
+    SMTP_FROM: str = ""
+    # STARTTLS on the standard submission port. Set false only for a local
+    # test server such as `python -m smtpd`.
+    SMTP_USE_TLS: bool = True
+    SMTP_TIMEOUT_SECONDS: int = 20
+
     # Master switch for Module 5. Off means answers are recorded and stored
     # exactly as before, with no transcription and no analysis — useful when
     # the Gemini quota is spent and an interview still has to run.
@@ -126,6 +143,15 @@ class Settings(BaseSettings):
     @property
     def github_enabled(self) -> bool:
         return bool(self.GITHUB_CLIENT_ID and self.GITHUB_CLIENT_SECRET)
+
+    @property
+    def email_enabled(self) -> bool:
+        """True once there is a host to talk to. See SMTP_HOST above."""
+        return bool(self.SMTP_HOST)
+
+    @property
+    def email_from(self) -> str:
+        return self.SMTP_FROM or self.SMTP_USER
 
     @property
     def gemini_api_keys(self) -> list[str]:

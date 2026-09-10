@@ -46,6 +46,41 @@ function AnswerAudio({ interviewId, sequenceNo }) {
 }
 
 /**
+ * Module 9: the same report as a PDF.
+ *
+ * Its own component so the download's in-flight and failed states live beside
+ * the button rather than in the modal's state — a failed export must not read
+ * as the whole review having failed.
+ */
+function DownloadReport({ interviewId }) {
+  const [state, setState] = useState('idle'); // idle | working | error
+
+  return (
+    <>
+      <button
+        type="button"
+        className="btn"
+        disabled={state === 'working'}
+        onClick={async () => {
+          setState('working');
+          try {
+            await api.downloadInterviewReport(interviewId);
+            setState('idle');
+          } catch {
+            setState('error');
+          }
+        }}
+      >
+        {state === 'working' ? 'Preparing…' : 'Download PDF'}
+      </button>
+      {state === 'error' && (
+        <small className="error">The report could not be generated.</small>
+      )}
+    </>
+  );
+}
+
+/**
  * A past interview in full: the session recording, and every question with
  * its transcript, its own recording and its Module 5 score.
  *
@@ -182,6 +217,7 @@ export default function InterviewReview({ interview, onClose }) {
           <button className="btn btn-primary" onClick={onClose}>
             Close
           </button>
+          <DownloadReport interviewId={interview.id} />
         </div>
       </div>
     </div>

@@ -4,10 +4,12 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api import analytics, auth, interviews, resumes, settings as settings_api, tickets, users, voice
+from app.api import notifications
 from app.core.config import settings
 from app.core.security import decode_access_token
 from app.db.session import Base, SessionLocal, engine
 from app.models import interview as interview_model  # noqa: F401  (registers the tables)
+from app.models import notification as notification_model  # noqa: F401  (registers the table)
 from app.models import recording as recording_model  # noqa: F401  (registers the tables)
 from app.models import resume as resume_model  # noqa: F401  (registers the table)
 from app.models import setting as setting_model  # noqa: F401  (registers the table)
@@ -95,6 +97,7 @@ app.include_router(resumes.router, prefix=settings.API_PREFIX)
 app.include_router(analytics.router, prefix=settings.API_PREFIX)
 app.include_router(tickets.router, prefix=settings.API_PREFIX)
 app.include_router(settings_api.router, prefix=settings.API_PREFIX)
+app.include_router(notifications.router, prefix=settings.API_PREFIX)
 
 
 @app.get("/")

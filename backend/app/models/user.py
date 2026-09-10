@@ -35,6 +35,16 @@ class User(Base):
     # token stops working, so blocking is real rather than cosmetic.
     is_blocked = Column(Boolean, nullable=False, default=False, server_default="false")
 
+    # Module 9: whether automated email is sent to this user.
+    #
+    # Defaults to on, because everything sent is transactional — it is about
+    # the user's own interviews or their own work queue, not marketing. It is
+    # still a real switch: automated mail with no way to stop it is a defect,
+    # not a feature. Nothing sends at all until SMTP_HOST is configured.
+    email_notifications = Column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False

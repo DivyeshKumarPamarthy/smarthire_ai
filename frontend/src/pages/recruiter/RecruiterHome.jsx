@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import AppLayout from '../../components/AppLayout';
 import Section from '../../components/Section';
+import Notifications from '../../components/Notifications';
 import ReportDialog from '../../components/ReportDialog';
 import { Panel, NotAvailable } from '../../components/Panel';
 import Leaderboard from '../../components/Leaderboard';
@@ -333,6 +334,16 @@ export default function RecruiterHome() {
       </Section>
 
       {/* ---------- reports ---------- */}
+      <Section
+        id="alerts"
+        title="Alerts"
+        subtitle="Interview activity and reminders raised for you."
+      >
+        <div className="card">
+          <Notifications role="recruiter" />
+        </div>
+      </Section>
+
       <Section
         id="report"
         title="Reports you have raised"

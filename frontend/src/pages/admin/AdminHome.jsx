@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import AppLayout from '../../components/AppLayout';
 import Section from '../../components/Section';
+import Notifications from '../../components/Notifications';
 import { Panel } from '../../components/Panel';
 import Leaderboard from '../../components/Leaderboard';
 import { api } from '../../lib/api';
@@ -489,6 +490,16 @@ export default function AdminHome() {
       </Section>
 
       {/* ---------- settings ---------- */}
+      <Section
+        id="alerts"
+        title="Alerts"
+        subtitle="Interview activity and reminders raised for you."
+      >
+        <div className="card">
+          <Notifications role="admin" />
+        </div>
+      </Section>
+
       <Section
         id="settings"
         title="Platform settings"

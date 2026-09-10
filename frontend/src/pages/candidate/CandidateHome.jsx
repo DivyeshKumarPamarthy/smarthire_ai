@@ -9,6 +9,7 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../lib/api';
 import { useApi } from '../../lib/useApi';
 import PerformanceAnalytics from '../../components/PerformanceAnalytics';
+import Notifications from '../../components/Notifications';
 import { downloadTextFile, buildActivityReport } from '../../lib/report';
 
 const TYPES = ['TECHNICAL', 'HR', 'APTITUDE', 'BEHAVIORAL'];
@@ -460,6 +461,17 @@ export default function CandidateHome() {
               </table>
             </div>
           </Panel>
+        </div>
+      </Section>
+
+      {/* ---------- notifications (Module 9) ---------- */}
+      <Section
+        id="notifications"
+        title="Notifications"
+        subtitle="Reminders, alerts and summaries raised for you."
+      >
+        <div className="card">
+          <Notifications />
         </div>
       </Section>
 
