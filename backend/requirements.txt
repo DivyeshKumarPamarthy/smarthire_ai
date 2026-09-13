@@ -36,3 +36,8 @@ websockets>=12.0
 
 # Local model provider (AI_PROVIDER=ollama) — no API key, no quota
 ollama>=0.4.0
+
+# Module 9/10: downloadable PDF reports. Imported at module scope by
+# app/services/report_pdf.py, so the app will not start without it —
+# it was missing here and only a clean install would have shown that.
+reportlab>=5.0.0

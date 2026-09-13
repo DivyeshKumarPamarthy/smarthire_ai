@@ -13,6 +13,18 @@ class Settings(BaseSettings):
     # before Postgres is configured.
     DATABASE_URL: str = "sqlite:///./smarthire.db"
 
+    # Which deployment this is. Only "development" tolerates the insecure
+    # defaults below; anything else refuses to start without real secrets.
+    ENVIRONMENT: str = "development"
+
+    # The default is deliberately a recognisable non-secret rather than a
+    # random value generated at import. A random per-process default would
+    # "work" in production while silently invalidating every token on each
+    # restart, which is a far worse failure than refusing to boot.
+    #
+    # ENVIRONMENT=production makes this a hard startup error — see
+    # _assert_production_secrets below. Generate one with:
+    #   python -c "import secrets; print(secrets.token_urlsafe(48))"
     JWT_SECRET_KEY: str = "insecure-dev-key-change-me"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
@@ -175,4 +187,38 @@ class Settings(BaseSettings):
         return bool(self.gemini_api_keys)
 
 
+INSECURE_JWT_DEFAULT = "insecure-dev-key-change-me"
+
+
+def _assert_production_secrets(config: "Settings") -> None:
+    """
+    Refuse to start a production deployment on development secrets.
+
+    A forgotten environment variable is the realistic way this platform ends up
+    signing tokens with a key that is committed in the repository for anyone to
+    read — and it fails silently, because the app works perfectly with a known
+    key. Anyone able to read config.py could then mint a token for any account,
+    including an administrator.
+
+    So it is a startup error rather than a warning. A deployment that will not
+    boot gets fixed in minutes; a warning in a log nobody reads does not.
+    """
+    if config.ENVIRONMENT.strip().lower() == "development":
+        return
+
+    problems = []
+    if config.JWT_SECRET_KEY == INSECURE_JWT_DEFAULT:
+        problems.append(
+            "JWT_SECRET_KEY is still the development default. Generate one "
+            'with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+        )
+
+    if problems:
+        raise RuntimeError(
+            f"Refusing to start with ENVIRONMENT={config.ENVIRONMENT!r}:\n  - "
+            + "\n  - ".join(problems)
+        )
+
+
 settings = Settings()
+_assert_production_secrets(settings)

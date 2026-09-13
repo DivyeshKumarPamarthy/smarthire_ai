@@ -1,0 +1,125 @@
+# SmartHire AI — Render blueprint
+#
+# Apply with Render's "Blueprint" flow, which reads this file and creates every
+# resource below. Nothing here deploys on its own; see
+# docs/DEPLOYMENT-CHECKLIST.md, which has to be worked through in order because
+# this repository has no migration framework.
+#
+# Why Render at all: this app needs three things together that most cheap hosts
+# do not offer at once — a persistent disk (376 MB of candidate recordings and
+# growing), real WebSockets held open for the length of an interview, and a
+# managed Postgres. An ephemeral filesystem silently deletes recordings on
+# every restart, which is the single worst failure available here.
+
+services:
+  # ---------------------------------------------------------------- backend
+  - type: web
+    name: smarthire-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter          # the free plan has no persistent disk
+
+    # Load-bearing, not a performance setting. metrics.py and ai_metrics.py
+    # keep their counters in process memory, so a second instance splits the
+    # admin dashboard's view of the platform rather than sharing it. Scale up,
+    # not out, until those counters live somewhere shared.
+    numInstances: 1
+
+    healthCheckPath: /api/health
+
+    disk:
+      name: smarthire-uploads
+      # Must match the working directory in backend/Dockerfile: the upload
+      # paths in app/core/config.py are relative, so they resolve to
+      # /app/uploads. Mount anywhere else and the app writes to the container's
+      # own filesystem and loses everything on restart — with no error.
+      mountPath: /app/uploads
+      sizeGB: 1
+
+    envVars:
+      - key: ENVIRONMENT
+        value: production          # makes a missing JWT_SECRET_KEY a startup error
+
+      # Set in the dashboard, never in this file — it is committed.
+      - key: JWT_SECRET_KEY
+        sync: false
+
+      - key: DATABASE_URL
+        fromDatabase:
+          name: smarthire-db
+          property: connectionString
+
+      # Both must be the real deployed frontend origin. Left at localhost, the
+      # browser blocks every API call and the app looks broken with no
+      # server-side error to find.
+      - key: FRONTEND_URL
+        fromService:
+          type: web
+          name: smarthire-web
+          property: host
+      - key: BACKEND_CORS_ORIGINS
+        fromService:
+          type: web
+          name: smarthire-web
+          property: host
+
+      # --- AI: decide before going live, see the checklist ---
+      # Gemini's free tier is 20 requests/day and Module 5 spends one per
+      # answer. Either add billing, list extra keys in GEMINI_API_KEYS, or set
+      # ANALYSE_ANSWERS=false and run without transcription.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEYS
+        sync: false
+      - key: ANALYSE_ANSWERS
+        value: "true"
+
+      # --- email: inert until SMTP_HOST is set ---
+      # Notifications are still recorded and shown in-app without this; they
+      # are marked "not emailed" rather than silently dropped.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_USE_TLS
+        value: "true"
+
+  # --------------------------------------------------------------- frontend
+  # A native static site rather than the container in frontend/Dockerfile:
+  # free, CDN-backed, and there is no process to keep alive. That Dockerfile is
+  # kept for hosts without a static-site product.
+  - type: web
+    name: smarthire-web
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./frontend/dist
+    rootDir: ./frontend
+
+    envVars:
+      # Baked into the bundle at build time by Vite, not read at runtime, so
+      # changing it requires a rebuild rather than a restart.
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: smarthire-api
+          property: host
+
+    routes:
+      # Single-page app: every path serves index.html, or a refresh on
+      # /candidate#history 404s before React is reached.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+databases:
+  - name: smarthire-db
+    databaseName: smarthire
+    plan: basic-256mb
+    # Postgres, matching local development. The SQLite fallback in config.py is
+    # for local convenience only — it has no place on a deployment that holds
+    # more than one candidate's data.
