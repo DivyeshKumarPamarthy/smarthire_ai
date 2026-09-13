@@ -18,6 +18,24 @@ Two rules run through all of it, both about not overclaiming:
   Nothing here forecasts. "Weak area" means the axis a candidate has actually
   scored lowest on across their history, not a prediction about how they will
   do next time — the data supports the first claim and not the second.
+
+ROW SHAPE, and the contract change of 2026-09-11:
+
+  `skill_breakdown` and `weak_areas` take (category, analysis, completed_at)
+  and count **completed interviews only**. They previously took
+  (category, analysis) and counted every graded answer, including answers from
+  interviews a candidate started and abandoned.
+
+  That was inconsistent with `performance_trend`, which has always plotted
+  completed interviews only, and the inconsistency became visible once Module
+  10 put both figures on one screen: the same candidate's technical relevance
+  read 28.0 from one function and 38.2 from the other. See
+  docs/plans/module-10-dashboard-analytics/DECISION-weak-areas-population.md
+  for the options weighed and why completed-only won.
+
+  The third element is required rather than optional on purpose. Making it
+  default would let a caller silently get the old population back, which is the
+  exact failure this change exists to remove.
 """
 
 from typing import Dict, List, Optional, Sequence
@@ -52,12 +70,28 @@ def _mean(values: Sequence[float]) -> Optional[float]:
     return round(sum(values) / len(values), 1) if values else None
 
 
+def _from_completed_interviews(rows: Sequence[tuple]) -> List[tuple]:
+    """
+    Drop answers belonging to interviews that were never finished.
+
+    Shared by skill_breakdown and weak_areas rather than written twice, because
+    weak_areas derives its weakest *category* from skill_breakdown's output: if
+    the two ever filtered differently, a candidate's weakest axis and weakest
+    category would be computed over different populations — the same split this
+    change exists to remove, reproduced inside one function.
+    """
+    return [(category, analysis) for category, analysis, completed_at in rows
+            if completed_at is not None]
+
+
 def skill_breakdown(rows: Sequence[tuple]) -> List[dict]:
     """
     Per-category averages of each rubric axis.
 
-    `rows` is a sequence of (category, analysis) pairs — one per answered
-    question across every interview the candidate has done.
+    `rows` is a sequence of (category, analysis, completed_at) triples — one
+    per answered question across the candidate's interviews. Answers from
+    interviews that were never completed are excluded; see the module
+    docstring.
 
     Categories are the question categories Module 3 assigns ("data
     interpretation", "logical reasoning", and so on), which is the closest
@@ -66,7 +100,7 @@ def skill_breakdown(rows: Sequence[tuple]) -> List[dict]:
     """
     buckets: Dict[str, Dict[str, List[float]]] = {}
 
-    for category, analysis in rows:
+    for category, analysis in _from_completed_interviews(rows):
         score = _graded_score(analysis)
         if score is None or not category:
             continue
@@ -177,12 +211,15 @@ def weak_areas(rows: Sequence[tuple]) -> dict:
     honest claim the stored answers support and the useful one for deciding
     what to practise.
 
+    Counts completed interviews only — see the module docstring for the change
+    and the reasoning behind it.
+
     Returns available=False when nothing has been graded, so the caller can say
     "no data yet" rather than naming a weakest axis out of four zeros.
     """
     totals: Dict[str, List[float]] = {axis: [] for axis in WEIGHTS}
 
-    for _category, analysis in rows:
+    for _category, analysis in _from_completed_interviews(rows):
         score = _graded_score(analysis)
         if score is None:
             continue
@@ -195,7 +232,10 @@ def weak_areas(rows: Sequence[tuple]) -> dict:
     if not axis_averages:
         return {
             "available": False,
-            "reason": "No answer has been scored yet, so there is nothing to compare.",
+            "reason": (
+                "No answer from a completed interview has been scored yet, so "
+                "there is nothing to compare."
+            ),
         }
 
     weakest_axis = min(axis_averages, key=axis_averages.get)
@@ -224,3 +264,4 @@ def weak_areas(rows: Sequence[tuple]) -> dict:
             "future performance."
         ),
     }
+

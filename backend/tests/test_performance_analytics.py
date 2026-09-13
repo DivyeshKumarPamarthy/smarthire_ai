@@ -8,6 +8,18 @@ The cases that matter most are the ones about *not overclaiming* — a single
 graded answer must not be presented as a settled skill level, and a handful of
 interviews must not be dressed up as a trajectory. Those are the ways this
 screen could quietly mislead a candidate about their own record.
+
+REWRITTEN 2026-09-11 for a deliberate contract change. `skill_breakdown` and
+`weak_areas` now take (category, analysis, completed_at) and count **completed
+interviews only**; they previously took (category, analysis) and counted every
+graded answer, including answers from abandoned interviews.
+
+This file is normally treated as frozen — Module 10's slices are required to
+leave it untouched, because an edit here is the signal that a change meant to
+be additive was not. This rewrite is the sanctioned exception: the contract is
+being changed on purpose and the tests are updated to match, which is a
+different act from a contract drifting silently. The reasoning is in
+docs/plans/module-10-dashboard-analytics/DECISION-weak-areas-population.md.
 """
 
 import sys
@@ -22,11 +34,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.services import performance_analytics as pa  # noqa: E402
 
 
+COMPLETED = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+
 def answer(category, *, communication=50, confidence=50, technical=50, professionalism=50,
-           overall=50.0, graded=True, analysed=True):
-    """One (category, analysis) row shaped exactly as Module 5 stores it."""
+           overall=50.0, graded=True, analysed=True, completed_at=COMPLETED):
+    """
+    One (category, analysis, completed_at) row as Module 5 stores it.
+
+    `completed_at=None` means the answer belongs to an interview the candidate
+    never finished. It defaults to a completed interview so the tests that are
+    not about the population stay readable.
+    """
     if not analysed:
-        return (category, None)
+        return (category, None, completed_at)
     return (
         category,
         {
@@ -40,6 +61,7 @@ def answer(category, *, communication=50, confidence=50, technical=50, professio
                 "overall": overall,
             },
         },
+        completed_at,
     )
 
 
@@ -77,6 +99,43 @@ class TestSkillBreakdown:
             answer("middling", overall=55.0),
         ]
         assert [s["category"] for s in pa.skill_breakdown(rows)] == ["weak", "middling", "strong"]
+
+    def test_skill_breakdown_sorts_weakest_first(self):
+        """
+        The ordering is a contract, not an implementation detail.
+
+        `shortlist_insights` reads the *tail* of this list as a candidate's
+        strongest skill (`best = skills[-1]` in the shortlist endpoint). If this
+        sort were ever inverted, that code would keep working silently and
+        start publishing someone's weakest area as their headline strength in
+        front of a recruiter.
+
+        Asserted here separately from test_weakest_category_comes_first on
+        purpose: that test is named for the weakest-first property and someone
+        changing the sort might reasonably update it. This one names the
+        consumer, so the coupling cannot be edited away without reading why it
+        exists.
+        """
+        rows = [
+            answer("middling", overall=55.0),
+            answer("strongest", overall=95.0),
+            answer("weakest", overall=5.0),
+        ]
+        ordered = pa.skill_breakdown(rows)
+
+        assert [s["category"] for s in ordered] == ["weakest", "middling", "strongest"]
+        # The two ends, stated as the consumers read them.
+        assert ordered[0]["category"] == "weakest"
+        assert ordered[-1]["category"] == "strongest", (
+            "shortlist_insights takes skills[-1] as the strongest skill"
+        )
+
+    def test_skill_breakdown_tail_is_strongest_even_with_two_categories(self):
+        """The smallest list where head and tail differ — the boundary case."""
+        rows = [answer("high", overall=80.0), answer("low", overall=20.0)]
+        ordered = pa.skill_breakdown(rows)
+        assert ordered[0]["category"] == "low"
+        assert ordered[-1]["category"] == "high"
 
     def test_thin_evidence_is_flagged_not_hidden(self):
         """
@@ -199,3 +258,90 @@ class TestWeakAreas:
         """
         weak = pa.weak_areas([answer("sql")])
         assert "not a prediction" in weak["method_note"]
+
+
+class TestCompletedInterviewsOnly:
+    """
+    The contract change of 2026-09-11, tested directly.
+
+    These are the tests that would have caught the split in the first place:
+    before this change `skill_breakdown` and `weak_areas` counted answers from
+    abandoned interviews while `performance_trend` refused to plot them, and
+    nothing asserted that the three agreed about which interviews exist.
+    """
+
+    ABANDONED = None  # an interview the candidate started and never finished
+
+    def test_skill_breakdown_excludes_abandoned_answers(self):
+        rows = [
+            answer("sql", overall=80.0),
+            answer("sql", overall=10.0, completed_at=self.ABANDONED),
+        ]
+        [skill] = pa.skill_breakdown(rows)
+        assert skill["answers_graded"] == 1
+        assert skill["overall"] == 80.0
+
+    def test_weak_areas_excludes_abandoned_answers(self):
+        rows = [
+            answer("sql", technical=80),
+            answer("sql", technical=10, completed_at=self.ABANDONED),
+        ]
+        assert pa.weak_areas(rows)["axis_averages"]["technical_relevance"] == 80.0
+
+    def test_an_abandoned_only_category_does_not_appear_at_all(self):
+        """Not zero, not provisional — absent. It was never assessed."""
+        rows = [
+            answer("finished", overall=70.0),
+            answer("walked_out", overall=5.0, completed_at=self.ABANDONED),
+        ]
+        assert [s["category"] for s in pa.skill_breakdown(rows)] == ["finished"]
+
+    def test_all_answers_abandoned_reads_as_no_data(self):
+        rows = [answer("sql", overall=40.0, completed_at=self.ABANDONED)]
+        assert pa.skill_breakdown(rows) == []
+        weak = pa.weak_areas(rows)
+        assert weak["available"] is False
+        assert "completed interview" in weak["reason"]
+
+    def test_weakest_axis_and_weakest_category_share_one_population(self):
+        """
+        The trap this change had to avoid. `weak_areas` derives its weakest
+        *category* from `skill_breakdown`, so if the two filtered differently a
+        candidate's weakest axis and weakest category would be computed over
+        different sets of answers — the same split, reproduced inside a single
+        function.
+        """
+        rows = (
+            [answer("finished", technical=70, overall=70.0) for _ in range(3)]
+            + [answer("abandoned", technical=1, overall=1.0,
+                      completed_at=self.ABANDONED) for _ in range(3)]
+        )
+        weak = pa.weak_areas(rows)
+        assert weak["weakest_category"] == "finished"
+        assert weak["axis_averages"]["technical_relevance"] == 70.0
+
+    def test_the_three_functions_agree_about_which_interviews_exist(self):
+        """
+        performance_trend has always excluded unfinished interviews. After this
+        change all three agree, which is the whole point of making it.
+        """
+        rows = [
+            answer("sql", overall=80.0),
+            answer("sql", overall=10.0, completed_at=self.ABANDONED),
+        ]
+        trend = pa.performance_trend([
+            interview(1, 80.0, days_ago=1),
+            interview(2, 10.0, days_ago=None),  # never completed
+        ])
+        assert trend["interviews_scored"] == 1
+        assert pa.skill_breakdown(rows)[0]["answers_graded"] == 1
+        assert pa.weak_areas(rows)["graded_answers"] == 1
+
+    def test_completion_is_required_not_optional(self):
+        """
+        A two-element row must fail loudly. Accepting it would let a caller
+        silently reinstate the old all-time population, which is precisely the
+        failure this change removes.
+        """
+        with pytest.raises(ValueError):
+            pa.skill_breakdown([("sql", {"available": True})])
