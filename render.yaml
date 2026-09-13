@@ -5,11 +5,12 @@
 # docs/DEPLOYMENT-CHECKLIST.md, which has to be worked through in order because
 # this repository has no migration framework.
 #
-# Why Render at all: this app needs three things together that most cheap hosts
-# do not offer at once — a persistent disk (376 MB of candidate recordings and
-# growing), real WebSockets held open for the length of an interview, and a
-# managed Postgres. An ephemeral filesystem silently deletes recordings on
-# every restart, which is the single worst failure available here.
+# Why Render at all: this app needs real WebSockets held open for the length of
+# an interview, and a managed Postgres. It also wants a persistent disk for
+# candidate recordings — Render offers one, and this deployment deliberately
+# does without it to stay on the free tier. Uploads therefore do not survive a
+# restart. That is a known, accepted cost recorded in the checklist, not an
+# oversight; the trade is documented at the disk block below.
 
 services:
   # ---------------------------------------------------------------- backend
@@ -18,7 +19,7 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    plan: starter          # the free plan has no persistent disk
+    plan: free             # no persistent disk on this tier — see the note below
 
     # Load-bearing, not a performance setting. metrics.py and ai_metrics.py
     # keep their counters in process memory, so a second instance splits the
@@ -28,14 +29,17 @@ services:
 
     healthCheckPath: /api/health
 
-    disk:
-      name: smarthire-uploads
-      # Must match the working directory in backend/Dockerfile: the upload
-      # paths in app/core/config.py are relative, so they resolve to
-      # /app/uploads. Mount anywhere else and the app writes to the container's
-      # own filesystem and loses everything on restart — with no error.
-      mountPath: /app/uploads
-      sizeGB: 1
+    # NO PERSISTENT DISK — deliberate, see docs/DEPLOYMENT-CHECKLIST.md
+    # (2026-09-13). Uploads land on the container's own filesystem and are lost
+    # on every restart, redeploy and free-tier spin-down. The app creates the
+    # upload directories on first write, so a fresh container works; it simply
+    # starts empty. Re-adding a disk later is this block plus a paid instance
+    # and needs no code change — the upload paths are already correct:
+    #
+    #   disk:
+    #     name: smarthire-uploads
+    #     mountPath: /app/uploads    # must match WORKDIR in backend/Dockerfile
+    #     sizeGB: 1
 
     envVars:
       - key: ENVIRONMENT
@@ -119,7 +123,17 @@ services:
 databases:
   - name: smarthire-db
     databaseName: smarthire
-    plan: basic-256mb
+    # FREE TIER, AND IT HAS A DELETION DATE — see docs/DEPLOYMENT-CHECKLIST.md
+    # (2026-09-13). Unlike the missing disk, this is not a standing tradeoff to
+    # accept once: a free Render Postgres expires 30 days after creation, then
+    # allows 14 days' grace to upgrade, and is deleted with all of its data
+    # after that. Scores, transcripts, reports and every user account live
+    # here. Upgrading to a paid plan during the grace period preserves the
+    # database in place — the checklist has the dates and the procedure.
+    #
+    # "free" is Render's own identifier for the 0.1 CPU / 256 MB plan
+    # ("0.1c-256mb" is the equivalent alias).
+    plan: free
     # Postgres, matching local development. The SQLite fallback in config.py is
     # for local convenience only — it has no place on a deployment that holds
     # more than one candidate's data.

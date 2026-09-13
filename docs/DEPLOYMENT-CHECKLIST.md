@@ -154,24 +154,135 @@ broken with nothing wrong in the server logs.
 
 ---
 
-## 6. Persistent disk
+## 6. Storage — no persistent disk on this deployment
 
-- [ ] Disk mounted at **`/app/uploads`**, 1 GB to start.
+**Decision, 2026-09-13: deploying without a persistent disk, deliberately.**
 
-The upload paths in `config.py` are relative, so with the Dockerfile's
-`WORKDIR /app` they resolve to `/app/uploads`. Mount anywhere else and the app
-writes into the container's own filesystem and loses every recording on
-restart — **with no error at all**, which makes it the worst failure available
-here.
+This is a portfolio and demo project. A persistent disk on Render requires a
+paid instance, and the cost was judged not worth it for a deployment whose
+purpose is to be shown working rather than to hold anyone's data. Durability
+was traded away with eyes open.
 
-- [ ] **The uploads disk has no backup by default.** Render's persistent disks
-      are not snapshotted unless you configure it. Every candidate's audio and
-      video lives only there, and a lost disk loses all of it permanently. Not
-      being fixed now — recorded so it is a choice rather than a gap discovered
-      later.
+### What this costs, concretely
 
-Current local footprint is 376 MB and it only grows: every interview adds audio
-per answer plus a session video, and there is no retention policy. Watch it.
+Every file the platform stores lives only on the container's own filesystem:
+
+- candidate **video recordings** of interview sessions
+- **answer audio** for every question answered aloud
+- uploaded **résumé PDFs**
+
+All of it is destroyed on:
+
+- every **restart**
+- every **redeploy**
+- the free tier's automatic **spin-down after 15 minutes of inactivity**
+
+That last one is the surprising one. It needs no action from anyone — leave the
+app alone over lunch and it happens by itself. A candidate who completes an
+interview in the morning and returns in the afternoon finds their recordings
+gone, while their **scores, transcripts and reports survive**, because those
+live in Postgres rather than on disk.
+
+- [ ] Understood and accepted for this deployment.
+
+### No code change is needed, now or later
+
+Verified rather than assumed: all three write sites — `app/api/resumes.py:63`,
+`app/api/voice.py:168`, `app/api/interviews.py:644` — call
+`directory.mkdir(parents=True, exist_ok=True)` immediately before writing.
+`parents=True` builds the whole chain including `uploads/` itself, so a
+container that boots with no `uploads` directory at all creates what it needs
+on first write. Exercised against a filesystem with no `uploads/` present, which
+is exactly the state a fresh ephemeral container starts in. The app starts
+empty; it does not crash.
+
+### Upgrading later
+
+1. Switch `smarthire-api` to a paid instance (`plan: starter` or above).
+2. Uncomment the `disk:` block in `render.yaml` — it is preserved there in full,
+   with `mountPath: /app/uploads` already correct.
+3. Redeploy.
+
+**No application change is required.** The upload paths are relative and
+already resolve to `/app/uploads` under the Dockerfile's `WORKDIR`. Files
+written before the upgrade are gone; files written after it persist.
+
+Note for whenever that happens: Render's persistent disks are **not backed up
+by default**. Attaching a disk makes uploads survive restarts, not disasters.
+
+---
+
+## 6b. Database — free Postgres, and it has a deletion date
+
+**Decision, 2026-09-13: free Postgres, deliberately.** Same reasoning as the
+disk: a demo project, cost over durability.
+
+**This one is not like the disk.** Without a disk, the app loses uploads on
+every restart but keeps running indefinitely — an unpleasant steady state you
+can live in forever. A free Postgres does not have a steady state. It has an
+expiry date, and after it the data is gone permanently. **This is a task with a
+deadline, not a tradeoff to accept once.**
+
+### The timeline, from Render's own documentation
+
+| Event | When |
+|---|---|
+| Database created | day 0 |
+| **Expires** — becomes inaccessible | **day 30** |
+| Grace period to upgrade | days 30–44 (**14 days**) |
+| **Deleted, with all data** | **after day 44** |
+
+Render emails before expiry and again before the grace period ends.
+
+Beware stale numbers: free Postgres used to last **90 days**, and Render's
+changelog records the change to 30. Anything citing 90 is out of date —
+including, possibly, a half-remembered figure.
+
+- [ ] **Record the real dates from the dashboard, here, once provisioned.**
+      Do not trust the table above, including when it agrees with you. Open the
+      database in Render, read the expiry date it actually shows for *this*
+      instance, and write both dates in:
+
+      - Created: `________`
+      - Expires (day 30): `________`
+      - Deleted after grace (day 44): `________`
+
+- [ ] Put the **expiry date in a calendar**, not just in this file. A checklist
+      is read while deploying; this deadline arrives a month later when nobody
+      is reading it.
+
+### What is lost at deletion
+
+Everything that survives a restart today:
+
+- every **user account** — candidates, recruiters, admins
+- every **interview**, its questions, transcripts and answers
+- every **score, rubric breakdown and report**
+- every **notification**
+
+The uploads are already ephemeral, so after day 44 there is nothing left of the
+deployment but the code.
+
+### Upgrading before expiry
+
+Confirmed against Render's documentation, because "a plan change is surely
+safe" is exactly the assumption worth checking for a live database: upgrading a
+free Postgres to a paid compute plan **preserves the database and its data in
+place**. It is not a create-and-migrate. This can be done during the grace
+period as well as before expiry.
+
+- [ ] Upgrade before day 44 if the data matters. There is no recovery
+      afterwards — Render's docs describe no restore path for a deleted free
+      database.
+
+### Free web service spin-down
+
+- [ ] **The free web service spins down after 15 minutes without traffic**, and
+      takes **about a minute** to spin back up on the next request or WebSocket
+      connection. Open the app a minute before demoing it to anyone.
+
+That spin-down is also what destroys the uploads described in §6 — it is the
+same event, and it needs nobody to do anything.
 
 ---
 
@@ -190,9 +301,22 @@ vertically until those counters live somewhere shared.
 
 - [ ] `GET /api/health` returns healthy and reports the expected AI provider.
 - [ ] Sign in as each of the three roles.
-- [ ] Run one interview end to end and confirm the recording survives a manual
-      service restart. This is the check that proves the disk is really mounted
-      — and the one most worth doing, because the failure it catches is silent.
+- [ ] Run one interview end to end and confirm it works while the service is
+      live: questions served, answer recorded, report produced.
+- [ ] Confirm the app **degrades gracefully** once storage is gone. Restart the
+      service, then open that interview from history. Expected: the page loads,
+      the score and transcript are still there from Postgres, and the missing
+      recording is reported as unavailable — no crash, no 500. What is being
+      checked is that absent files are handled, not that they survived; on this
+      tier they are not supposed to.
+
+      This should hold — both file endpoints guard for it. `get_recording`
+      (`app/api/interviews.py:723`) and `get_answer_audio`
+      (`app/api/interviews.py:404`) each test `path.is_file()` and raise **404,
+      not 500**, when the row exists but the file does not; the frontend already
+      renders that as "No camera recording was kept for this interview". The
+      step is still worth running, because it is the difference between a guard
+      that exists and a guard that works.
 - [ ] Check the admin dashboard's AI monitoring shows calls being counted.
 
 ## Known gaps, carried in deliberately
