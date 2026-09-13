@@ -265,3 +265,152 @@ def weak_areas(rows: Sequence[tuple]) -> dict:
         ),
     }
 
+
+def axis_progress(rows_by_interview: Sequence[tuple], axis: str) -> dict:
+    """
+    Movement on one named rubric axis across a candidate's scored interviews.
+
+    `rows_by_interview` is a sequence of (interview_id, completed_at, analyses)
+    where `analyses` is that interview's list of per-answer analysis blobs.
+
+    This exists because the overall trend cannot answer the question the advice
+    creates. Module 7 tells a candidate their weakest axis and hands them
+    something to practise; `performance_trend` then plots whether their
+    *overall score* moved. Those are different questions. A candidate can lift
+    their overall score by becoming more fluent while the technical relevance
+    they were told to fix sits exactly where it was, and a dashboard that
+    called that progress would be lying to the person it is supposed to help.
+
+    Direction is computed the same way `performance_trend` computes its own —
+    two halves compared, the same four-interview floor, the same flat band — so
+    the axis line and the score line can never disagree about what counts as
+    movement. `first` and `latest` are the raw endpoints, reported alongside
+    because they are what a candidate actually reads off the chart.
+    """
+    points: List[dict] = []
+
+    for interview_id, completed_at, analyses in rows_by_interview:
+        if completed_at is None:
+            continue
+
+        values = []
+        for analysis in analyses or []:
+            score = _graded_score(analysis)
+            if score is None:
+                continue
+            value = score.get(axis)
+            if isinstance(value, (int, float)):
+                values.append(value)
+
+        # An interview with no graded answer on this axis is missing data, not
+        # a zero — the same distinction drawn everywhere else in this module.
+        if not values:
+            continue
+
+        points.append(
+            {
+                "interview_id": interview_id,
+                "completed_at": completed_at,
+                "score": _mean(values),
+            }
+        )
+
+    points.sort(key=lambda p: p["completed_at"])
+
+    if not points:
+        return {
+            "available": False,
+            "axis": axis,
+            "reason": (
+                "No scored interview has an answer graded on this axis yet, so "
+                "there is nothing to track."
+            ),
+            "points": [],
+            "interviews": 0,
+        }
+
+    result = {
+        "available": True,
+        "axis": axis,
+        "points": points,
+        "interviews": len(points),
+        "first": points[0]["score"],
+        "latest": points[-1]["score"],
+        "direction": "insufficient_data",
+        "change": None,
+    }
+
+    if len(points) < MIN_INTERVIEWS_FOR_TREND:
+        return result
+
+    half = len(points) // 2
+    earlier = _mean([p["score"] for p in points[:half]])
+    later = _mean([p["score"] for p in points[-half:]])
+    change = round(later - earlier, 1)
+
+    result["change"] = change
+    if abs(change) < TREND_FLAT_BAND:
+        result["direction"] = "steady"
+    elif change > 0:
+        result["direction"] = "improving"
+    else:
+        result["direction"] = "declining"
+
+    return result
+
+
+# Which parts of a computed performance payload a recruiter may see.
+#
+# Gate 2's visibility table, in code. The rule is filter-never-recompute: a
+# recruiter sees a subset of the numbers the candidate sees, so the two can
+# never disagree about the same person. Recomputing for the recruiter is what
+# would let them drift.
+RECRUITER_VISIBLE_PERFORMANCE = ("skills", "trend", "axis_progress")
+
+RECRUITER_VISIBLE_WEAK_AREA_FIELDS = (
+    "available",
+    "reason",
+    "axis_averages",
+    "weakest_axis",
+    "weakest_axis_score",
+    "weakest_category",
+    "weakest_category_score",
+    "graded_answers",
+    "provisional",
+    "method_note",
+)
+
+# Absent by decision, not by oversight:
+#
+#   practice_recommendations — coaching addressed to the candidate ("do 3 mock
+#   interviews focused on cutting hedging language"). A recruiter reading
+#   someone's personal remediation plan turns self-improvement advice into a
+#   mark against them. The weakness itself is still shown as a number, and a
+#   number carries its own uncertainty in a way a prescription does not.
+#
+#   learning_resources — same reasoning, and useless to a recruiter besides:
+#   it is a reading list, not evidence.
+#
+# Nothing from Module 6 appears anywhere in this module. It is measured in the
+# candidate's own browser, so it is forgeable, and it never feeds a figure that
+# ranks or compares people.
+
+
+def recruiter_view(performance: dict) -> dict:
+    """
+    Filter a computed performance payload for a recruiter.
+
+    Mirrors behavior_analysis.recruiter_view() deliberately, including the
+    filter-rather-than-recompute guarantee it exists to provide.
+    """
+    view = {
+        key: performance[key]
+        for key in RECRUITER_VISIBLE_PERFORMANCE
+        if key in performance
+    }
+
+    weak = performance.get("weak_areas") or {}
+    view["weak_areas"] = {
+        key: weak[key] for key in RECRUITER_VISIBLE_WEAK_AREA_FIELDS if key in weak
+    }
+    return view

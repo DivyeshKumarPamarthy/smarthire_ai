@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { RATING_TONE } from '../lib/scoring';
+import { api } from '../lib/api';
 
 /**
  * Module 8 — the candidate's history rolled up: skills, trend, weak areas.
@@ -42,7 +43,7 @@ const pct = (value) => `${Math.max(0, Math.min(100, value ?? 0))}%`;
  * most a few dozen points, and pulling in a charting package to draw it would
  * cost more than the feature.
  */
-function TrendChart({ points }) {
+function TrendChart({ points, reference = null, referenceLabel = '' }) {
   if (points.length < 2) return null;
 
   const W = 640;
@@ -52,6 +53,10 @@ function TrendChart({ points }) {
   const lo = Math.min(...scores, 0);
   const hi = Math.max(...scores, 100);
   const span = hi - lo || 1;
+  const refY =
+    reference === null || reference === undefined
+      ? null
+      : H - PAD - ((reference - lo) / span) * (H - 2 * PAD);
 
   const xy = points.map((p, i) => [
     PAD + (i * (W - 2 * PAD)) / Math.max(points.length - 1, 1),
@@ -68,6 +73,23 @@ function TrendChart({ points }) {
       style={{ width: '100%', height: 'auto', display: 'block', marginTop: 12 }}
     >
       <path d={area} fill="var(--blue)" opacity="0.12" />
+      {/* The all-time average, drawn so the candidate can see that the low
+          lifetime figure and the high recent point describe the same axis over
+          different windows — rather than reading them as a contradiction. */}
+      {refY !== null && (
+        <>
+          <line
+            x1={PAD} y1={refY} x2={W - PAD} y2={refY}
+            stroke="var(--tx-2)" strokeWidth="1" strokeDasharray="4 4"
+          />
+          <text
+            x={W - PAD} y={refY - 5} textAnchor="end"
+            fill="var(--tx-2)" fontSize="11" fontFamily="var(--mono)"
+          >
+            {referenceLabel}
+          </text>
+        </>
+      )}
       <path d={line} fill="none" stroke="var(--blue)" strokeWidth="2" strokeLinejoin="round" />
       {xy.map(([x, y], i) => (
         <circle
@@ -84,21 +106,58 @@ function TrendChart({ points }) {
   );
 }
 
+/**
+ * Module 10, Slice 2 — the whole history as one PDF.
+ *
+ * Its own component so a failed export reads as a failed export, rather than
+ * making the whole performance card look broken.
+ */
+function DownloadHistory() {
+  const [state, setState] = useState('idle'); // idle | working | error
+
+  return (
+    <div className="actions gap-top">
+      <button
+        type="button"
+        className="btn"
+        disabled={state === 'working'}
+        onClick={async () => {
+          setState('working');
+          try {
+            await api.downloadHistoryReport();
+            setState('idle');
+          } catch {
+            setState('error');
+          }
+        }}
+      >
+        {state === 'working' ? 'Preparing…' : 'Download full history (PDF)'}
+      </button>
+      {state === 'error' && (
+        <small className="error">The report could not be generated.</small>
+      )}
+    </div>
+  );
+}
+
 export default function PerformanceAnalytics({ data, loading, error }) {
   if (loading) return <p className="note">Loading your performance history…</p>;
   if (error) return <p className="error">Your performance history could not be loaded.</p>;
   if (!data) return null;
 
-  const { skills = [], trend, weak_areas: weak } = data;
+  const { skills = [], trend, weak_areas: weak, axis_progress: progress } = data;
   const direction = DIRECTION[trend?.direction] ?? DIRECTION.insufficient_data;
   const hasScores = (trend?.interviews_scored ?? 0) > 0;
 
   if (!hasScores) {
     return (
-      <p className="note">
-        No interview of yours has been scored yet. Finish an interview to start building a
-        history here — skills, trend and weak areas all read from your scored answers.
-      </p>
+      <>
+        <p className="note">
+          No interview of yours has been scored yet. Finish an interview to start building a
+          history here — skills, trend and weak areas all read from your scored answers.
+        </p>
+        <DownloadHistory />
+      </>
     );
   }
 
@@ -128,6 +187,65 @@ export default function PerformanceAnalytics({ data, loading, error }) {
           A direction needs at least four scored interviews to compare against — until then these
           are just your scores, not a trajectory.
         </small>
+      )}
+
+      {/* ---------------- improvement on the named weak axis ---------------- */}
+      {progress?.available && (
+        <>
+          <p className="label gap-top">
+            Progress on {AXIS_LABEL[progress.axis] ?? progress.axis}
+          </p>
+          <small className="muted">
+            The axis you were told to work on, tracked across your interviews. This is
+            deliberately not your overall score — that can rise while the thing you were asked
+            to fix stays exactly where it was.
+          </small>
+          <small className="muted">
+            Each point is <strong>one finished interview&apos;s average</strong> on this axis.
+            That is a different window from the {weak?.weakest_axis_score} below, which averages
+            every graded answer you have ever given on it — including answers from interviews
+            you started and did not finish. The two differ for that reason, not because either
+            is wrong.
+          </small>
+          <div className="row">
+            <div>
+              <strong>
+                {progress.first} → {progress.latest}
+              </strong>
+              <small>
+                across {progress.interviews} interview{progress.interviews === 1 ? '' : 's'}
+                {progress.change !== null && progress.change !== undefined
+                  ? ` · ${progress.change > 0 ? '+' : ''}${progress.change} between your earlier and later halves`
+                  : ''}
+              </small>
+            </div>
+            <span className={`badge ${DIRECTION[progress.direction]?.tone ?? 'badge-muted'}`}>
+              {DIRECTION[progress.direction]?.label ?? progress.direction}
+            </span>
+          </div>
+
+          <TrendChart
+            points={progress.points}
+            reference={weak?.available ? weak.weakest_axis_score : null}
+            referenceLabel={`all-time ${weak?.weakest_axis_score ?? ''}`}
+          />
+
+          {progress.direction === 'insufficient_data' && (
+            <small className="muted">
+              Whether this is moving needs at least four scored interviews to compare against —
+              the same bar your overall trend uses. Until then these are just your scores on
+              that axis.
+            </small>
+          )}
+        </>
+      )}
+      {progress && !progress.available && (
+        <>
+          <p className="label gap-top">
+            Progress on {AXIS_LABEL[progress.axis] ?? progress.axis}
+          </p>
+          <p className="note">{progress.reason}</p>
+        </>
       )}
 
       {/* ---------------- skills ---------------- */}
@@ -186,13 +304,16 @@ export default function PerformanceAnalytics({ data, loading, error }) {
               <strong>{AXIS_LABEL[weak.weakest_axis] ?? weak.weakest_axis}</strong>
               <small>
                 Your lowest rubric axis, averaging {weak.weakest_axis_score} across{' '}
-                {weak.graded_answers} graded answer{weak.graded_answers === 1 ? '' : 's'}.
+                {weak.graded_answers} graded answer{weak.graded_answers === 1 ? '' : 's'} —
+                every answer you have given on it, including ones from interviews you did not
+                finish. The chart above plots finished interviews only, which is why its recent
+                points sit higher.
               </small>
             </div>
             <span className="badge badge-warn">{weak.weakest_axis_score}</span>
           </div>
 
-          {weak.weakest_category && (
+          {weak.weakest_category ? (
             <div className="row">
               <div>
                 <strong>{weak.weakest_category}</strong>
@@ -200,6 +321,17 @@ export default function PerformanceAnalytics({ data, loading, error }) {
               </div>
               <span className="badge badge-warn">{weak.weakest_category_score}</span>
             </div>
+          ) : (
+            /* Not an error, and not nothing: no category yet has the three
+               graded answers this platform requires before naming one as a
+               weakness. Saying so beats the row silently disappearing — the
+               same rule the per-answer report follows for a section it could
+               not produce. */
+            <p className="note">
+              No single question category has enough finished answers yet to name as your
+              weakest — that needs at least three in the same category. Your weakest rubric
+              axis above is based on all {weak.graded_answers} of them together.
+            </p>
           )}
 
           <div className="tags gap-top">
@@ -238,6 +370,8 @@ export default function PerformanceAnalytics({ data, loading, error }) {
           )}
 
           {weak.method_note && <small className="muted gap-top">{weak.method_note}</small>}
+
+      <DownloadHistory />
         </>
       )}
     </>

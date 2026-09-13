@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import AppLayout from '../../components/AppLayout';
 import Section from '../../components/Section';
 import Notifications from '../../components/Notifications';
+import CandidateCompare from '../../components/CandidateCompare';
+import ShortlistInsights from '../../components/ShortlistInsights';
 import ReportDialog from '../../components/ReportDialog';
 import { Panel, NotAvailable } from '../../components/Panel';
 import Leaderboard from '../../components/Leaderboard';
@@ -196,6 +198,14 @@ export default function RecruiterHome() {
           </div>
         )}
       </Section>
+      <Section
+        id="insights"
+        title="Shortlisting insights"
+        subtitle="Patterns worth a closer look, with the evidence behind each one."
+      >
+        <ShortlistInsights />
+      </Section>
+
 
       {/* ---------- leaderboard ---------- */}
       <Section
@@ -269,10 +279,7 @@ export default function RecruiterHome() {
         title="Compare candidates"
         subtitle="Side-by-side comparison of scored performance."
       >
-        <NotAvailable
-          what="Score comparison"
-          reason="Selecting specific candidates for a side-by-side view is not built yet. See the Leaderboard tab for candidates ranked by score, and the Candidates table above for interview counts, completion and résumé data."
-        />
+        <CandidateCompare />
       </Section>
 
       {/* ---------- templates ---------- */}

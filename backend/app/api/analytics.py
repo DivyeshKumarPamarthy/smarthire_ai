@@ -33,7 +33,15 @@ from app.models.resume import Resume, ResumeStatus
 from app.models.ticket import Ticket, TicketStatus
 from app.models.user import Role, User
 from app.schemas.analytics import (
+    AIMonitoring,
+    AxisProgress,
+    CandidateComparison,
     CandidatePerformance,
+    ComparisonCell,
+    ComparisonEntry,
+    Insight,
+    RecruiterCandidatePerformance,
+    ShortlistInsights,
     AdminAnalytics,
     CandidateAnalytics,
     CandidateInterviewSummary,
@@ -44,8 +52,9 @@ from app.schemas.analytics import (
     RecruiterCandidate,
     TimePoint,
 )
-from app.services import behavior_analysis, performance_analytics
-from app.services.scoring import rating_label
+from app.services import behavior_analysis, performance_analytics, shortlist_insights
+from app.services.ai_metrics import NOTE as AI_METRICS_NOTE, ai_metrics
+from app.services.scoring import WEIGHTS, rating_label
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -469,6 +478,68 @@ def live_interviews(db: Session = Depends(get_db)):
     return out
 
 
+def _performance_for(db: Session, user_id: int) -> dict:
+    """
+    One candidate's skills, trend, weak areas and axis progress.
+
+    Shared by the candidate's own view, the recruiter's filtered view and
+    comparison, so all three compute from the same code. A second
+    implementation for recruiters is exactly how two surfaces end up disagreeing
+    about the same person.
+
+    completed_at travels with every row: skill_breakdown and weak_areas count
+    completed interviews only and require it rather than defaulting.
+    """
+    rows = (
+        db.query(
+            InterviewQuestion.category,
+            InterviewQuestion.analysis,
+            Interview.completed_at,
+        )
+        .join(Interview, InterviewQuestion.interview_id == Interview.id)
+        .filter(Interview.user_id == user_id)
+        .all()
+    )
+    interviews = db.query(Interview).filter(Interview.user_id == user_id).all()
+
+    weak = performance_analytics.weak_areas(rows)
+
+    progress = None
+    if weak.get("available") and weak.get("weakest_axis"):
+        grouped: dict = {}
+        for interview_id, completed_at, analysis in (
+            db.query(Interview.id, Interview.completed_at, InterviewQuestion.analysis)
+            .join(InterviewQuestion, InterviewQuestion.interview_id == Interview.id)
+            .filter(Interview.user_id == user_id)
+            .all()
+        ):
+            grouped.setdefault(interview_id, (completed_at, []))[1].append(analysis)
+
+        progress = performance_analytics.axis_progress(
+            [(iid, done, analyses) for iid, (done, analyses) in grouped.items()],
+            weak["weakest_axis"],
+        )
+
+    return {
+        "skills": performance_analytics.skill_breakdown(rows),
+        "trend": performance_analytics.performance_trend(interviews),
+        "weak_areas": weak,
+        "axis_progress": progress,
+    }
+
+
+def _resolve_candidate(db: Session, user_id: int) -> User:
+    """A candidate by id, or 404. Same check the sessions route already makes."""
+    candidate = (
+        db.query(User).filter(User.id == user_id, User.role == Role.CANDIDATE).first()
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No such candidate."
+        )
+    return candidate
+
+
 @router.get(
     "/candidate/performance",
     response_model=CandidatePerformance,
@@ -491,16 +562,190 @@ def candidate_performance(
     and are therefore forgeable, and the platform's standing rule is that they
     never feed a number that ranks or grades anyone.
     """
-    rows = (
-        db.query(InterviewQuestion.category, InterviewQuestion.analysis)
-        .join(Interview, InterviewQuestion.interview_id == Interview.id)
-        .filter(Interview.user_id == current_user.id)
-        .all()
-    )
-    interviews = db.query(Interview).filter(Interview.user_id == current_user.id).all()
+    return CandidatePerformance(**_performance_for(db, current_user.id))
 
-    return CandidatePerformance(
-        skills=performance_analytics.skill_breakdown(rows),
-        trend=performance_analytics.performance_trend(interviews),
-        weak_areas=performance_analytics.weak_areas(rows),
+
+@router.get(
+    "/recruiter/candidates/{user_id}/performance",
+    response_model=RecruiterCandidatePerformance,
+    dependencies=[Depends(require_roles(Role.RECRUITER, Role.ADMIN))],
+)
+def recruiter_candidate_performance(
+    user_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Module 10: one candidate's skills, trend and weak areas, filtered.
+
+    Computed by the same function that backs the candidate's own view, then
+    filtered — never recomputed. Two code paths producing the same figure is
+    how two surfaces end up disagreeing about a person.
+
+    What is withheld and why is in performance_analytics.recruiter_view:
+    practice recommendations and learning resources are coaching addressed to
+    the candidate, and Module 6's camera figures never reach anything that
+    compares people.
+    """
+    candidate = _resolve_candidate(db, user_id)
+    view = performance_analytics.recruiter_view(_performance_for(db, user_id))
+    return RecruiterCandidatePerformance(
+        user_id=candidate.id, name=candidate.name, **view
     )
+
+
+@router.get(
+    "/recruiter/compare",
+    response_model=CandidateComparison,
+    dependencies=[Depends(require_roles(Role.RECRUITER, Role.ADMIN))],
+)
+def compare_candidates(
+    user_ids: str = Query(..., description="2-4 comma-separated candidate ids"),
+    db: Session = Depends(get_db),
+):
+    """
+    Two to four candidates on the same rubric axes.
+
+    Binding decisions from Gate 2, enforced here and not only in the UI:
+
+      **No sorting, ever.** Candidates come back in the order they were asked
+      for. There is no sort parameter and none may be added — sorting people by
+      a number an AI produced is the act this module refuses to automate.
+      Ranking exists once, in the leaderboard, where it is labelled as such.
+
+      **Two to four.** One is not a comparison, it is the single-candidate view
+      with different framing. Five makes the axes unreadable.
+
+    Every cell carries answers_graded and provisional, because side by side a
+    candidate with one graded answer must never read as equivalent to one with
+    twelve.
+    """
+    try:
+        ids = [int(part) for part in user_ids.split(",") if part.strip()]
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_ids must be comma-separated numbers.",
+        )
+
+    if len(ids) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Comparing needs at least two candidates.",
+        )
+    if len(ids) > 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At most four candidates can be compared at once.",
+        )
+
+    axes = list(WEIGHTS)
+    entries = []
+    # Iterated in the caller's order on purpose. Do not sort this.
+    for user_id in ids:
+        candidate = _resolve_candidate(db, user_id)
+        view = performance_analytics.recruiter_view(_performance_for(db, user_id))
+        weak = view.get("weak_areas") or {}
+        averages = weak.get("axis_averages") or {}
+        graded = weak.get("graded_answers", 0)
+
+        entries.append(
+            ComparisonEntry(
+                user_id=candidate.id,
+                name=candidate.name,
+                interviews_scored=(view.get("trend") or {}).get("interviews_scored", 0),
+                cells=[
+                    ComparisonCell(
+                        axis=axis,
+                        score=averages.get(axis),
+                        answers_graded=graded,
+                        provisional=graded < performance_analytics.MIN_ANSWERS_FOR_CONFIDENT_SKILL,
+                    )
+                    for axis in axes
+                ],
+            )
+        )
+
+    return CandidateComparison(
+        candidates=entries,
+        axes=axes,
+        note=(
+            "Shown in the order you selected. This view does not rank "
+            "candidates and cannot be sorted by score. Figures come from "
+            "completed interviews only; a candidate with few graded answers is "
+            "marked provisional and should not be read against one with many."
+        ),
+    )
+
+
+@router.get(
+    "/recruiter/shortlist-insights",
+    response_model=ShortlistInsights,
+    dependencies=[Depends(require_roles(Role.RECRUITER, Role.ADMIN))],
+)
+def recruiter_shortlist_insights(
+    db: Session = Depends(get_db),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """
+    Module 10: candidates worth a closer look, each with the evidence.
+
+    Not a ranking and not a recommendation — see shortlist_insights for the
+    three things this deliberately will not do.
+    """
+    candidates = (
+        db.query(User).filter(User.role == Role.CANDIDATE).order_by(User.id).limit(limit).all()
+    )
+
+    summaries = []
+    for candidate in candidates:
+        performance = _performance_for(db, candidate.id)
+        trend = performance["trend"]
+        skills = performance["skills"]
+        # skill_breakdown sorts weakest first, so the strongest is the tail.
+        best = skills[-1] if skills else None
+        summaries.append(
+            {
+                "user_id": candidate.id,
+                "name": candidate.name,
+                "average_score": trend.get("average"),
+                "interviews_scored": trend.get("interviews_scored", 0),
+                "trend_direction": trend.get("direction"),
+                "trend_change": trend.get("change"),
+                "best_skill": best["category"] if best else None,
+                "best_skill_score": best["overall"] if best else None,
+                "best_skill_answers": best["answers_graded"] if best else 0,
+            }
+        )
+
+    baseline = shortlist_insights.pool_baseline(
+        [s["average_score"] for s in summaries]
+    )
+
+    insights = []
+    for summary in summaries:
+        for raw in shortlist_insights.insights_for(summary, baseline):
+            insights.append(Insight(**raw))
+
+    return ShortlistInsights(
+        insights=insights,
+        pool_average=baseline.get("average"),
+        scored_candidates=baseline.get("scored_candidates", 0),
+        note=shortlist_insights.NOTE,
+    )
+
+
+@router.get(
+    "/admin/ai",
+    response_model=AIMonitoring,
+    dependencies=[Depends(require_roles(Role.ADMIN))],
+)
+def admin_ai_monitoring():
+    """
+    Module 10: what the AI provider actually did, over this process's lifetime.
+
+    Separate from /api/health on purpose — that is a cheap liveness check hit
+    frequently and must stay light. This is history, and it is admin-only:
+    operational data with nothing about any individual in it. No candidate
+    identity and no prompt content is recorded, by design.
+    """
+    return AIMonitoring(**ai_metrics.snapshot(), note=AI_METRICS_NOTE)

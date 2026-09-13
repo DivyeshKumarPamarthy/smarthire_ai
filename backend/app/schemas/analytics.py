@@ -246,9 +246,136 @@ class WeakAreas(BaseModel):
     method_note: Optional[str] = None
 
 
+class AxisPoint(BaseModel):
+    """One interview's average on a single rubric axis."""
+
+    interview_id: int
+    completed_at: datetime
+    score: float
+
+
+class AxisProgress(BaseModel):
+    """
+    Module 10: movement on the axis a candidate was told to work on.
+
+    Distinct from PerformanceTrend on purpose. That tracks the overall score;
+    this tracks the one axis the advice named, because a candidate can lift
+    their overall score while the thing they were asked to fix stays flat.
+    """
+
+    available: bool
+    axis: str
+    reason: Optional[str] = None
+    points: List[AxisPoint] = []
+    interviews: int = 0
+    first: Optional[float] = None
+    latest: Optional[float] = None
+    # improving | declining | steady | insufficient_data — the same four
+    # values, the same four-interview floor, as PerformanceTrend.
+    direction: str = "insufficient_data"
+    change: Optional[float] = None
+
+
 class CandidatePerformance(BaseModel):
     """Module 8: skills, trend and weak areas for one candidate."""
 
     skills: List[SkillStat] = []
     trend: PerformanceTrend
     weak_areas: WeakAreas
+    # Module 10, added additively — every key above is unchanged.
+    axis_progress: Optional[AxisProgress] = None
+
+
+# ---------------------------------------------------------- Module 10
+
+
+class RecruiterCandidatePerformance(BaseModel):
+    """
+    One candidate's performance, filtered for a recruiter.
+
+    Deliberately not CandidatePerformance: this shape cannot carry
+    practice_recommendations or learning_resources, so the visibility decision
+    is enforced by the type and not only by the filter that builds it.
+    """
+
+    user_id: int
+    name: str
+    skills: List[SkillStat] = []
+    trend: PerformanceTrend
+    weak_areas: Dict = {}
+    axis_progress: Optional[AxisProgress] = None
+
+
+class ComparisonCell(BaseModel):
+    """One candidate's standing on one axis, with its evidence attached."""
+
+    axis: str
+    score: Optional[float] = None
+    # Both mandatory, per the binding Gate 1/Gate 2 decision: side by side,
+    # thin evidence must stay visibly thin or a candidate with one graded
+    # answer reads as equivalent to one with twelve.
+    answers_graded: int = 0
+    provisional: bool = True
+
+
+class ComparisonEntry(BaseModel):
+    user_id: int
+    name: str
+    interviews_scored: int = 0
+    cells: List[ComparisonCell] = []
+
+
+class CandidateComparison(BaseModel):
+    """
+    Two to four candidates on the same axes.
+
+    `candidates` is in the order the caller supplied. There is no rank, no
+    position and no ordering hint — the interface must not perform ranking on a
+    recruiter's behalf. Ranking exists once, in the leaderboard, labelled.
+    """
+
+    candidates: List[ComparisonEntry] = []
+    axes: List[str] = []
+    note: str
+
+
+class Insight(BaseModel):
+    kind: str
+    candidate_id: int
+    candidate_name: str
+    headline: str
+    # Always populated. An insight whose reason cannot be shown is not emitted.
+    evidence: str
+    provisional: bool = False
+
+
+class ShortlistInsights(BaseModel):
+    insights: List[Insight] = []
+    pool_average: Optional[float] = None
+    scored_candidates: int = 0
+    note: str
+
+
+class AIOperationStat(BaseModel):
+    operation: str
+    calls: int
+    failures: int
+    quota_failures: int
+    failure_rate: float
+    avg_ms: float
+
+
+class AIMonitoring(BaseModel):
+    """
+    Provider-call history. In-memory, so the window begins at the last restart
+    — labelled as such and never presented as uptime.
+    """
+
+    window_start: datetime
+    total_calls: int = 0
+    total_failures: int = 0
+    failure_rate: float = 0.0
+    quota_failures: int = 0
+    avg_latency_ms: float = 0.0
+    operations: List[AIOperationStat] = []
+    note: str

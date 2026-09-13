@@ -20,6 +20,7 @@ export const SECTIONS = {
   recruiter: [
     ['overview', 'Overview'],
     ['candidates', 'Candidates'],
+    ['insights', 'Insights'],
     ['leaderboard', 'Leaderboard'],
     ['analytics', 'Analytics'],
     ['compare', 'Compare'],

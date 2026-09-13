@@ -191,8 +191,15 @@ def send_performance_summary(
     """
     from app.models.interview import InterviewQuestion
 
+    # Completed interviews only, matching the dashboard — see
+    # performance_analytics' module docstring. Summaries emailed before
+    # 2026-09-11 used the old all-time population and will not match.
     rows = (
-        db.query(InterviewQuestion.category, InterviewQuestion.analysis)
+        db.query(
+            InterviewQuestion.category,
+            InterviewQuestion.analysis,
+            Interview.completed_at,
+        )
         .join(Interview, InterviewQuestion.interview_id == Interview.id)
         .filter(Interview.user_id == current_user.id)
         .all()
@@ -210,6 +217,47 @@ def send_performance_summary(
         kind=NotificationKind.PERFORMANCE_SUMMARY,
         title=title, body=body,
         send_email=send_email,
+    )
+
+
+@router.get("/reports/history.pdf")
+def download_history_report(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Module 10, Slice 2: the candidate's whole scored history as one PDF.
+
+    Owner only — generated for the signed-in candidate and nobody else. Placed
+    beside the per-interview report because that is where the PDF route
+    already lives; the /notifications prefix is inherited, not a new decision.
+
+    Reads the same computation the dashboard does, so the file and the screen
+    cannot disagree.
+    """
+    from app.api.analytics import _performance_for
+
+    interviews = (
+        db.query(Interview).filter(Interview.user_id == current_user.id).all()
+    )
+
+    try:
+        pdf = report_pdf.build_history_report(
+            current_user, interviews, _performance_for(db, current_user.id)
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("History PDF failed for user %s", current_user.id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The report could not be generated.",
+        )
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="interview-history.pdf"'
+        },
     )
 
 

@@ -266,3 +266,235 @@ def build_interview_report(interview, summary: dict, behavior: Optional[dict] = 
 
     doc.build(flow)
     return buffer.getvalue()
+
+
+def build_history_report(user, interviews, performance: dict) -> bytes:
+    """
+    A candidate's whole scored history as one PDF.
+
+    Reuses _styles(), _kv_table() and the colour constants above so a candidate
+    holding this and a per-interview report recognises them as the same
+    document family.
+
+    ON THE TWO WINDOWS, which Slice 1 had to reconcile on screen with a dashed
+    reference line and adjacent copy — neither of which a printed page has:
+
+      Every figure here now comes from completed interviews only, so the two
+      numbers a reader sees are no longer drawn from different populations.
+      What remains is the ordinary distinction between an average across a
+      history and the individual results inside it, and print handles that
+      perfectly well as long as each figure says which it is. So both are
+      shown, and every heading names its window explicitly: "averaged across
+      all N completed interviews" against "one row per interview".
+
+      Had the populations still differed, the agreed fallback was to drop the
+      lifetime average entirely rather than print a number that invites the
+      wrong reading. That is not needed, and this note records why so nobody
+      reinstates the ambiguity later.
+    """
+    st = _styles()
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=20 * mm, rightMargin=20 * mm,
+        topMargin=18 * mm, bottomMargin=18 * mm,
+        title=f"Interview history — {user.name}",
+        author="SmartHire AI",
+    )
+
+    trend = (performance or {}).get("trend") or {}
+    weak = (performance or {}).get("weak_areas") or {}
+    skills = (performance or {}).get("skills") or []
+    progress = (performance or {}).get("axis_progress") or {}
+    points = trend.get("points") or []
+
+    flow = []
+    flow.append(Paragraph("Interview history", st["title"]))
+    flow.append(Paragraph(user.name, st["sub"]))
+    flow.append(HRFlowable(width="100%", thickness=1, color=INK, spaceAfter=10))
+
+    completed = [iv for iv in interviews if iv.completed_at is not None]
+    flow.append(_kv_table([
+        ["Interviews taken", str(len(interviews))],
+        ["Completed", str(len(completed))],
+        ["Scored", str(trend.get("interviews_scored", 0))],
+        ["Generated", datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")],
+    ]))
+
+    # Nothing scored: say so and stop, rather than printing a page of dashes.
+    if not points:
+        flow.append(Paragraph("No scored interviews yet", st["h2"]))
+        flow.append(Paragraph(
+            "None of your interviews has been both completed and scored, so "
+            "there is no history to report yet. Recordings and answers are "
+            "saved either way — finishing an interview is what produces a "
+            "score.",
+            st["body"],
+        ))
+        doc.build(flow)
+        return buffer.getvalue()
+
+    # ---------- lifetime figures, labelled as such ----------
+    flow.append(Paragraph(
+        f"Overall — averaged across all {len(points)} completed interviews",
+        st["h2"],
+    ))
+    summary_rows = [
+        ["Average score", str(trend.get("average"))],
+        ["Best score", str(trend.get("best"))],
+    ]
+    direction = trend.get("direction")
+    if direction and direction != "insufficient_data":
+        change = trend.get("change")
+        summary_rows.append([
+            "Direction",
+            f"{direction}" + (f" ({change:+})" if change is not None else ""),
+        ])
+    else:
+        summary_rows.append([
+            "Direction",
+            "not enough interviews to say — four are needed to compare",
+        ])
+    flow.append(_kv_table(summary_rows))
+
+    if weak.get("available") and weak.get("axis_averages"):
+        rows = [["Axis", "Average across all completed interviews"]]
+        for axis in WEIGHTS:
+            if axis in weak["axis_averages"]:
+                rows.append([AXIS_LABEL.get(axis, axis), str(weak["axis_averages"][axis])])
+        table = Table(rows, colWidths=[60 * mm, 90 * mm], hAlign="LEFT")
+        table.setStyle(TableStyle([
+            ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 8.5),
+            ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+            ("FONT", (0, 1), (-1, -1), "Helvetica", 9),
+            ("TEXTCOLOR", (0, 1), (-1, -1), INK),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.6, RULE),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.4, RULE),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        flow.append(Spacer(1, 8))
+        flow.append(table)
+        flow.append(Paragraph(
+            f"Based on {weak.get('graded_answers', 0)} graded answers from "
+            "completed interviews. Answers from interviews you did not finish "
+            "are not counted.",
+            st["note"],
+        ))
+
+    # ---------- per-interview figures, labelled as such ----------
+    flow.append(Paragraph("Each interview — one row per interview", st["h2"]))
+    flow.append(Paragraph(
+        "These are the individual results the averages above are taken from. "
+        "A single interview will often sit well above or below your average; "
+        "that is the difference between the two, not a disagreement.",
+        st["note"],
+    ))
+
+    rows = [["Completed", "Type", "Domain", "Score", "Rating"]]
+    for point in points:
+        completed_at = point.get("completed_at")
+        rows.append([
+            completed_at.strftime("%d %b %Y") if hasattr(completed_at, "strftime")
+            else str(completed_at)[:10],
+            str(point.get("interview_type", "")),
+            str(point.get("domain", ""))[:26],
+            str(point.get("score")),
+            str(point.get("rating", "")),
+        ])
+    table = Table(rows, colWidths=[28 * mm, 26 * mm, 52 * mm, 20 * mm, 32 * mm], hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 8.5),
+        ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+        ("FONT", (0, 1), (-1, -1), "Helvetica", 9),
+        ("TEXTCOLOR", (0, 1), (-1, -1), INK),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, RULE),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.4, RULE),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    flow.append(Spacer(1, 6))
+    flow.append(table)
+
+    # ---------- what to work on ----------
+    if weak.get("available"):
+        flow.append(Paragraph("Where you are weakest", st["h2"]))
+        axis = weak.get("weakest_axis")
+        flow.append(Paragraph(
+            f"<b>{AXIS_LABEL.get(axis, axis)}</b> — {weak.get('weakest_axis_score')} "
+            f"averaged across all completed interviews.",
+            st["body"],
+        ))
+        if weak.get("weakest_category"):
+            flow.append(Paragraph(
+                f"Weakest question category: <b>{weak['weakest_category']}</b> "
+                f"({weak['weakest_category_score']}).",
+                st["body"],
+            ))
+        else:
+            flow.append(Paragraph(
+                "No single question category yet has the three graded answers "
+                "needed to name one as your weakest.",
+                st["note"],
+            ))
+
+        if progress.get("available") and progress.get("interviews", 0) > 1:
+            flow.append(Paragraph(
+                f"On this axis you have gone from {progress['first']} to "
+                f"{progress['latest']} across {progress['interviews']} "
+                "completed interviews"
+                + (
+                    f" — {progress['direction']}."
+                    if progress.get("direction") != "insufficient_data"
+                    else ", which is too few to call a direction."
+                ),
+                st["body"],
+            ))
+
+        for item in weak.get("practice_recommendations", []):
+            flow.append(Paragraph(f"&bull; {item}", st["body"]))
+        resources = weak.get("learning_resources") or []
+        if resources:
+            flow.append(Paragraph("Where to practise: " + ", ".join(resources), st["note"]))
+
+    # ---------- by category ----------
+    if skills:
+        flow.append(Paragraph("By question category — weakest first", st["h2"]))
+        rows = [["Category", "Average", "Graded answers"]]
+        for skill in skills:
+            rows.append([
+                str(skill["category"]),
+                str(skill["overall"]),
+                f"{skill['answers_graded']}" + (" (provisional)" if skill["provisional"] else ""),
+            ])
+        table = Table(rows, colWidths=[70 * mm, 30 * mm, 50 * mm], hAlign="LEFT")
+        table.setStyle(TableStyle([
+            ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 8.5),
+            ("TEXTCOLOR", (0, 0), (-1, 0), MUTED),
+            ("FONT", (0, 1), (-1, -1), "Helvetica", 9),
+            ("TEXTCOLOR", (0, 1), (-1, -1), INK),
+            ("LINEBELOW", (0, 0), (-1, 0), 0.6, RULE),
+            ("LINEBELOW", (0, 1), (-1, -2), 0.4, RULE),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        flow.append(Spacer(1, 6))
+        flow.append(table)
+        if any(s["provisional"] for s in skills):
+            flow.append(Paragraph(
+                "A category marked provisional has fewer than three graded "
+                "answers behind it — shown because it is your real data, but "
+                "too thin to read against the others.",
+                st["note"],
+            ))
+
+    flow.append(Paragraph(
+        "Scores are an AI assessment against a fixed, disclosed rubric "
+        "(Communication 30%, Confidence 25%, Technical relevance 30%, "
+        "Professionalism 15%), not a certified evaluation. Every figure in "
+        "this report comes from completed interviews only.",
+        st["note"],
+    ))
+
+    doc.build(flow)
+    return buffer.getvalue()

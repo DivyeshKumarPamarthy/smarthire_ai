@@ -21,6 +21,9 @@ export default function AdminHome() {
   const metrics = useApi(() => api.metrics());
   const settings = useApi(() => api.getSettings());
   const health = useApi(() => api.health());
+  // Module 10: what the provider actually did, as opposed to whether it is
+  // reachable right now. A spent quota is invisible to a liveness check.
+  const aiHistory = useApi(() => api.adminAiMonitoring());
 
   const [ticketFilter, setTicketFilter] = useState('OPEN');
   const tickets = useApi(
@@ -457,6 +460,82 @@ export default function AdminHome() {
         title="AI configuration"
         subtitle="Which provider and models are actually serving requests."
       >
+        <Panel {...aiHistory} onRetry={aiHistory.reload}>
+          {aiHistory.data && (
+            <div className="card">
+              <h2>Provider calls</h2>
+              <p className="muted">
+                What the AI actually did, not whether it answers right now. A spent quota is
+                invisible to a reachability check — it was exactly that failure, unnoticed for a
+                day, that this exists to surface.
+              </p>
+              <div className="grid cols-2">
+                <div className="row">
+                  <div>
+                    <strong>Calls</strong>
+                    <small>{aiHistory.data.total_calls.toLocaleString()} since restart</small>
+                  </div>
+                </div>
+                <div className="row">
+                  <div>
+                    <strong>Failures</strong>
+                    <small>
+                      {aiHistory.data.total_failures} · {aiHistory.data.failure_rate}%
+                    </small>
+                  </div>
+                  <span
+                    className={`badge ${aiHistory.data.total_failures ? 'badge-warn' : 'badge-ok'}`}
+                  >
+                    {aiHistory.data.total_failures ? 'errors seen' : 'clean'}
+                  </span>
+                </div>
+                <div className="row">
+                  <div>
+                    <strong>Quota failures</strong>
+                    <small>counted apart — recoverable, and fixable by a key or a wait</small>
+                  </div>
+                  <span
+                    className={`badge ${aiHistory.data.quota_failures ? 'badge-bad' : 'badge-muted'}`}
+                  >
+                    {aiHistory.data.quota_failures}
+                  </span>
+                </div>
+                <div className="row">
+                  <div>
+                    <strong>Average latency</strong>
+                    <small>{aiHistory.data.avg_latency_ms} ms per call</small>
+                  </div>
+                </div>
+              </div>
+
+              {aiHistory.data.operations.length === 0 ? (
+                <p className="note">No AI call has been made since this server started.</p>
+              ) : (
+                <>
+                  <p className="label gap-top">By operation</p>
+                  {aiHistory.data.operations.map((op) => (
+                    <div className="row" key={op.operation}>
+                      <div>
+                        <strong className="mono">{op.operation}</strong>
+                        <small>
+                          {op.calls} call{op.calls === 1 ? '' : 's'} · {op.avg_ms} ms avg
+                          {op.quota_failures ? ` · ${op.quota_failures} quota` : ''}
+                        </small>
+                      </div>
+                      <span
+                        className={`badge ${op.failures ? 'badge-warn' : 'badge-ok'}`}
+                      >
+                        {op.failures} failed
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
+              <small className="muted gap-top">{aiHistory.data.note}</small>
+            </div>
+          )}
+        </Panel>
+
         <Panel {...health} onRetry={health.reload}>
           {health.data && (
             <div className="card card-narrow">

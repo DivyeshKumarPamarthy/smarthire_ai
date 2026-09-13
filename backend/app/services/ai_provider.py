@@ -19,9 +19,11 @@ speech conversion in the platform runs one way, on the candidate's recording.
 """
 
 import logging
+import time
 from typing import List
 
 from app.core.config import settings
+from app.services.ai_metrics import ai_metrics
 from app.services.providers import gemini, ollama_provider
 from app.services.providers.base import (  # re-exported: callers import these from here
     AINotConfigured,
@@ -118,33 +120,89 @@ def provider_status() -> dict:
     }
 
 
+def _measured(operation: str, call):
+    """
+    Run one provider call, record what it did, and get out of the way.
+
+    Module 10. This sits on the critical path of every AI call in the platform,
+    so it is written to be transparent in both directions:
+
+      An exception propagates unchanged — same type, same message, same
+      traceback — after the failure is recorded. Re-wrapping would be worse
+      than useless: AIQuotaExceeded specifically must survive, because Module
+      7's multi-key failover branches on that exact type and flattening it to
+      the base class would silently disable key rotation while every counter
+      here stayed perfectly accurate.
+
+      A return value is passed back as-is, not copied or coerced.
+
+    A bug in this wrapper breaks transcription and scoring, not merely
+    monitoring, which is why both directions are pinned by tests.
+    """
+    started = time.perf_counter()
+    try:
+        result = call()
+    except AIQuotaExceeded:
+        ai_metrics.record(
+            operation, ok=False, quota=True,
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
+        raise
+    except Exception:
+        ai_metrics.record(
+            operation, ok=False, quota=False,
+            duration_ms=(time.perf_counter() - started) * 1000,
+        )
+        raise
+
+    ai_metrics.record(
+        operation, ok=True, quota=False,
+        duration_ms=(time.perf_counter() - started) * 1000,
+    )
+    return result
+
+
 def generate_questions(
     *, interview_type: str, domain: str, difficulty: str, count: int
 ) -> List[GeneratedQuestion]:
-    return active_provider().generate_questions(
-        interview_type=interview_type, domain=domain, difficulty=difficulty, count=count
+    return _measured(
+        "generate_questions",
+        lambda: active_provider().generate_questions(
+            interview_type=interview_type, domain=domain,
+            difficulty=difficulty, count=count,
+        ),
     )
 
 
 def extract_resume(resume_text: str):
-    return active_provider().extract_resume(resume_text)
+    return _measured(
+        "extract_resume", lambda: active_provider().extract_resume(resume_text)
+    )
 
 
 def analyse_communication(*, question: str, transcript: str) -> CommunicationAssessment:
     """Grammar and communication quality. Text only, so it follows AI_PROVIDER."""
-    return active_provider().analyse_communication(question=question, transcript=transcript)
+    return _measured(
+        "analyse_communication",
+        lambda: active_provider().analyse_communication(
+            question=question, transcript=transcript
+        ),
+    )
 
 
 def score_answer(
     *, question: str, transcript: str, interview_type: str, domain: str, difficulty: str
 ) -> AnswerScore:
     """Module 5's rubric score for one answer. Text only, so it follows AI_PROVIDER."""
-    return active_provider().score_answer(
-        question=question,
-        transcript=transcript,
-        interview_type=interview_type,
-        domain=domain,
-        difficulty=difficulty,
+    return _measured(
+        "score_answer",
+        lambda: active_provider().score_answer(
+            question=question,
+            transcript=transcript,
+            interview_type=interview_type,
+            domain=domain,
+            difficulty=difficulty,
+        ),
     )
 
 
@@ -161,8 +219,13 @@ def score_answer(
 
 
 def speech_to_text(audio: bytes, mime_type: str = "audio/webm") -> str:
-    return gemini.speech_to_text(audio, mime_type=mime_type)
+    return _measured(
+        "speech_to_text", lambda: gemini.speech_to_text(audio, mime_type=mime_type)
+    )
 
 
 def assess_pronunciation(audio: bytes, mime_type: str = "audio/webm") -> PronunciationNotes:
-    return gemini.assess_pronunciation(audio, mime_type=mime_type)
+    return _measured(
+        "assess_pronunciation",
+        lambda: gemini.assess_pronunciation(audio, mime_type=mime_type),
+    )

@@ -2,6 +2,7 @@ import React from 'react';
 import { api } from '../lib/api';
 import { useApi } from '../lib/useApi';
 import { Panel } from './Panel';
+import RecruiterCandidatePerformance from './RecruiterCandidatePerformance';
 import { RATING_TONE } from '../lib/scoring';
 
 const shortTime = (iso) => (iso ? new Date(iso).toLocaleString() : '—');
@@ -27,6 +28,12 @@ const duration = (seconds) =>
  */
 export default function CandidateSessions({ candidate, onClose }) {
   const sessions = useApi(() => api.candidateInterviews(candidate.user_id), [candidate.user_id]);
+  // Module 10. Its own request: this walks every answer the candidate has
+  // given, and the session list should not wait on that scan.
+  const performance = useApi(
+    () => api.recruiterCandidatePerformance(candidate.user_id),
+    [candidate.user_id],
+  );
 
   return (
     <div
@@ -38,6 +45,8 @@ export default function CandidateSessions({ candidate, onClose }) {
       <div className="modal-box modal-box-wide">
         <h2>{candidate.name}</h2>
         <p className="muted">{candidate.email}</p>
+
+        <RecruiterCandidatePerformance {...performance} />
 
         <Panel
           {...sessions}

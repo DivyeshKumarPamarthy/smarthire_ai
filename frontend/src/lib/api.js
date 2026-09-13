@@ -221,6 +221,29 @@ export const api = {
     setTimeout(() => URL.revokeObjectURL(url), 10000);
   },
 
+  /**
+   * Module 10: the candidate's whole scored history as one PDF.
+   *
+   * Same fetch-then-click approach as the per-interview report — the endpoint
+   * needs the bearer token and a plain <a href> cannot carry one.
+   */
+  downloadHistoryReport: async () => {
+    const response = await fetch(`${BASE}/notifications/reports/history.pdf`, {
+      headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, 'That report could not be generated.');
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'interview-history.pdf';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  },
+
   /* Session control. The live interview drives these over the WebSocket
      instead; these are for controlling a session from outside it. */
   pauseInterview: (id) => request(`/interviews/${id}/pause`, { method: 'POST', auth: true }),
@@ -266,6 +289,14 @@ export const api = {
     request(`/notifications/performance-summary?send_email=${sendEmail}`, {
       method: 'POST', auth: true,
     }),
+  // --- Module 10 ---
+  recruiterCandidatePerformance: (userId) =>
+    request(`/analytics/recruiter/candidates/${userId}/performance`, { auth: true }),
+  compareCandidates: (userIds) =>
+    request(`/analytics/recruiter/compare?user_ids=${userIds.join(',')}`, { auth: true }),
+  shortlistInsights: () => request('/analytics/recruiter/shortlist-insights', { auth: true }),
+  adminAiMonitoring: () => request('/analytics/admin/ai', { auth: true }),
+
   recruiterAnalytics: () => request('/analytics/recruiter', { auth: true }),
   recruiterCandidates: (params) =>
     request(`/analytics/recruiter/candidates${query(params)}`, { auth: true }),
