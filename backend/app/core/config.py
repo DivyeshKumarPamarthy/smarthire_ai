@@ -1,6 +1,9 @@
 from typing import List
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing_extensions import Annotated
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -142,11 +145,62 @@ class Settings(BaseSettings):
     MAX_VIDEO_RECORDING_MB: int = 200
 
     FRONTEND_URL: str = "http://localhost:5455"
-    BACKEND_CORS_ORIGINS: List[str] = [
+    # Annotated with NoDecode so pydantic-settings does NOT try to JSON-decode
+    # the environment value. Without it the env source calls json.loads() on
+    # the raw string and raises SettingsError before any field validator runs —
+    # which is why a validator alone does not fix this, and why the obvious
+    # dashboard value of `https://smarthire-web.onrender.com` crashed the app
+    # at startup. NoDecode hands the raw string to _parse_origins below.
+    BACKEND_CORS_ORIGINS: Annotated[List[str], NoDecode] = [
         "http://localhost:3000",
         "http://localhost:5453",
         "http://localhost:5455"
     ]
+
+    @field_validator("BACKEND_CORS_ORIGINS", mode="before")
+    @classmethod
+    def _parse_origins(cls, value):
+        """
+        Accept a JSON array, a comma-separated string, or a single bare URL.
+
+        pydantic-settings parses a List[str] field from the environment as
+        JSON, so a hosting dashboard set to
+        `https://smarthire-web.onrender.com` — the obvious thing to type —
+        makes the application fail to start with
+
+            SettingsError: error parsing value for field "BACKEND_CORS_ORIGINS"
+
+        Fixed here rather than by contorting the value in the dashboard into
+        `["https://..."]`, because that shape is unobvious, easy to get wrong
+        under quoting rules that differ between hosts, and would have to be
+        remembered every time the variable is set anywhere.
+
+        mode="before" so this runs on the raw environment string, ahead of the
+        JSON parsing that would otherwise reject it.
+        """
+        if not isinstance(value, str):
+            # Already a list — the default, or a .env file parsed as TOML/JSON.
+            return value
+
+        text = value.strip()
+        if not text:
+            return []
+
+        # A JSON array is still valid input and stays supported: anything
+        # already setting this the documented way keeps working.
+        if text.startswith("["):
+            import json
+
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                pass
+            else:
+                return [str(item).strip() for item in parsed if str(item).strip()]
+
+        # Otherwise treat it as comma-separated. A single URL with no commas
+        # is just the one-element case and needs no special handling.
+        return [part.strip() for part in text.split(",") if part.strip()]
 
     @property
     def google_enabled(self) -> bool:
