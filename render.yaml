@@ -100,18 +100,39 @@ services:
   - type: web
     name: smarthire-web
     runtime: static
-    buildCommand: npm ci && npm run build
-    staticPublishPath: ./frontend/dist
     rootDir: ./frontend
+    buildCommand: npm ci && npm run build
+    # Relative to rootDir, NOT the repo root. Render's Monorepo Support docs
+    # list the publish directory among the fields resolved against the root
+    # directory once one is set; the general Blueprint reference describes the
+    # no-rootDir case and reads as though it were repo-relative, which is the
+    # trap. With rootDir: ./frontend, "./frontend/dist" resolves to
+    # frontend/frontend/dist — a path that does not exist, and the build fails
+    # looking for it. `vite build` writes to frontend/dist, so from rootDir
+    # that is ./dist.
+    staticPublishPath: ./dist
 
     envVars:
+      # Set in the dashboard, the same way JWT_SECRET_KEY and GEMINI_API_KEY
+      # are on the API service.
+      #
+      # NOT fromService/property: host. That returns the service's bare
+      # hostname on Render's *private* network — no scheme, no path, and not
+      # an address a browser can reach. api.js expects a full origin plus the
+      # API prefix, as its own fallback shows:
+      #
+      #     import.meta.env.VITE_API_URL ?? 'http://localhost:8000/api'
+      #
+      # There is no fromService property that yields a complete URL —
+      # `hostport` is the closest and still has no scheme — so this has to be
+      # set by hand. Use the API service's public origin:
+      #
+      #     https://smarthire-api.onrender.com/api
+      #
       # Baked into the bundle at build time by Vite, not read at runtime, so
       # changing it requires a rebuild rather than a restart.
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: smarthire-api
-          property: host
+        sync: false
 
     routes:
       # Single-page app: every path serves index.html, or a refresh on
