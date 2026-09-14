@@ -42,3 +42,9 @@ backend/uploads/
 
 # Local agent/tooling settings — machine-specific, not part of the project.
 .claude/
+
+# Presentation deck and its generator — personal review material, not part of
+# the project. Kept local deliberately: the .pptx is a build artifact and
+# build_deck.py embeds speaker notes written for one presenter.
+SmartHire_AI_Springboard_Final_Review.pptx
+build_deck.py
