@@ -48,3 +48,8 @@ backend/uploads/
 # build_deck.py embeds speaker notes written for one presenter.
 SmartHire_AI_Springboard_Final_Review.pptx
 build_deck.py
+
+# Generated from docs/PROJECT_REPORT.md by frontend/mkpdf.mjs — regenerate
+# rather than commit, so the PDF can never drift from its source.
+PROJECT_REPORT.pdf
+docs/PROJECT_REPORT.pdf
