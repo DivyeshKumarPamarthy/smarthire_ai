@@ -125,9 +125,23 @@ services:
       #
       # There is no fromService property that yields a complete URL —
       # `hostport` is the closest and still has no scheme — so this has to be
-      # set by hand. Use the API service's public origin:
+      # set by hand. Use the API service's public origin, and read it from the
+      # Render dashboard rather than deriving it from the service name below.
       #
-      #     https://smarthire-api.onrender.com/api
+      # `.onrender.com` subdomains are globally unique. `smarthire-api` was
+      # already taken, so Render appended a suffix — the live services are:
+      #
+      #     API       https://smarthire-api-g1ts.onrender.com
+      #     frontend  https://smarthire-web-oss7.onrender.com
+      #
+      # so the value to set here is:
+      #
+      #     https://smarthire-api-g1ts.onrender.com/api
+      #
+      # The bare `https://smarthire-api.onrender.com` belongs to somebody
+      # else's account entirely and currently returns "suspended by its
+      # owner" — pointing the frontend at it would fail silently, with the
+      # browser calling a stranger's service.
       #
       # Baked into the bundle at build time by Vite, not read at runtime, so
       # changing it requires a rebuild rather than a restart.
